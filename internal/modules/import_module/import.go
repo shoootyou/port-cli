@@ -46,6 +46,7 @@ type Options struct {
 	DryRun                 bool
 	SkipEntities           bool
 	SkipSystemBlueprints   bool // skip _* blueprint schemas and their entities
+	IncludeRuleResults     bool // include _rule_result system blueprint entities (included by default)
 	IncludeResources       []string
 	ExcludeBlueprints      []string // deep: exclude blueprint schema + all its resources
 	ExcludeBlueprintSchema []string // shallow: exclude only the blueprint schema, keep resources
@@ -239,21 +240,10 @@ func isConflictError(err error) bool {
 	return strings.Contains(errStr, "409") || strings.Contains(errStr, "Conflict")
 }
 
-// protectedBlueprints are system blueprints that don't allow entity creation via API.
-var protectedBlueprints = map[string]bool{
-	"_rule_result": true,
-}
-
 // isProtectedBlueprint checks if a blueprint is protected (entities can't be created).
-func isProtectedBlueprint(blueprintID string) bool {
-	// Check explicit list
-	if protectedBlueprints[blueprintID] {
-		return true
-	}
-	// Also skip any blueprint starting with underscore followed by specific patterns
-	// that are known to be system-managed
+func isProtectedBlueprint(blueprintID string, includeRuleResults bool) bool {
 	if strings.HasPrefix(blueprintID, "_rule") {
-		return true
+		return !includeRuleResults
 	}
 	return false
 }
@@ -651,6 +641,12 @@ func (i *Importer) importBlueprints(ctx context.Context, blueprints []api.Bluepr
 	// Phase 2d: Add aggregationProperties in topological order so that agg props
 	// referencing another blueprint's agg props are applied after their dependencies
 	// (e.g. businessApplication.codeQualityBugs must run after component.codeQualityBugs).
+	// Failures are retried after Phase 3 (system blueprint updates) because some agg props
+	// use path filters through system blueprint relations (e.g. _rule_result._githubBranch)
+	// that don't exist until Phase 3 applies the system blueprint schema.
+	failedAggProps := make(map[string]map[string]interface{})
+	var failedAggMu sync.Mutex
+
 	if len(storedAggProps) > 0 {
 		levels := TopologicalSortAggProps(storedAggProps)
 		for levelIdx, level := range levels {
@@ -664,10 +660,12 @@ func (i *Importer) importBlueprints(ctx context.Context, blueprints []api.Bluepr
 				id, aggProps := id, storedAggProps[id]
 				pool.Go(func() {
 					err := i.updateBlueprintFieldsDirect(ctx, id, map[string]interface{}{"aggregationProperties": aggProps})
-					i.mu.Lock()
 					if err != nil {
-						i.errors.Add(err, "blueprint", id)
+						failedAggMu.Lock()
+						failedAggProps[id] = aggProps
+						failedAggMu.Unlock()
 					}
+					i.mu.Lock()
 					count++
 					i.reportProgress(label, count, len(level))
 					i.mu.Unlock()
@@ -786,6 +784,31 @@ func (i *Importer) importBlueprints(ctx context.Context, blueprints []api.Bluepr
 		pool.Wait()
 	}
 
+	// Phase 4: Retry aggregationProperties that failed in Phase 2d. Some agg props
+	// reference path filters through system blueprint relations (e.g. _rule_result._githubBranch)
+	// that only exist after Phase 3 updates the system blueprint schema.
+	if len(failedAggProps) > 0 {
+		i.reportProgress("Blueprints (adding aggregationProperties, pass 2/2)", 0, len(failedAggProps))
+		count := 0
+		for id, aggProps := range failedAggProps {
+			if !allExistingBPs[id] {
+				continue
+			}
+			id, aggProps := id, aggProps
+			pool.Go(func() {
+				err := i.updateBlueprintFieldsDirect(ctx, id, map[string]interface{}{"aggregationProperties": aggProps})
+				i.mu.Lock()
+				if err != nil {
+					i.errors.Add(err, "blueprint", id)
+				}
+				count++
+				i.reportProgress("Blueprints (adding aggregationProperties, pass 2/2)", count, len(failedAggProps))
+				i.mu.Unlock()
+			})
+		}
+		pool.Wait()
+	}
+
 	return nil
 }
 
@@ -885,7 +908,7 @@ func (i *Importer) updateBlueprintFieldsDirect(ctx context.Context, id string, f
 func (i *Importer) importOtherResources(ctx context.Context, data *export.Data, opts Options, result *Result) error {
 	// Import entities
 	if !opts.SkipEntities && shouldImport("entities", opts.IncludeResources) {
-		if err := i.importEntities(ctx, data.Entities, result); err != nil {
+		if err := i.importEntities(ctx, data.Entities, opts.IncludeRuleResults, result); err != nil {
 			return err
 		}
 	}
@@ -959,7 +982,7 @@ func (i *Importer) importSidebarPipeline(ctx context.Context, pipeline []Sidebar
 // importEntities imports entities with two-phase approach and bounded concurrency.
 // Phase 1: Create all entities with relations stripped (to avoid missing entity references)
 // Phase 2: Update entities that have relations to add them back
-func (i *Importer) importEntities(ctx context.Context, entities []api.Entity, result *Result) error {
+func (i *Importer) importEntities(ctx context.Context, entities []api.Entity, includeRuleResults bool, result *Result) error {
 	if len(entities) == 0 {
 		return nil
 	}
@@ -984,7 +1007,7 @@ func (i *Importer) importEntities(ctx context.Context, entities []api.Entity, re
 	inheritedOwnershipSkipped := 0
 	for _, entity := range entities {
 		blueprintID, _ := entity["blueprint"].(string)
-		if isProtectedBlueprint(blueprintID) {
+		if isProtectedBlueprint(blueprintID, includeRuleResults) {
 			protectedSkipped++
 			continue
 		}
