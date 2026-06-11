@@ -15,6 +15,25 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+var blueprintSystemFields = []string{"createdBy", "updatedBy", "createdAt", "updatedAt", "id"}
+
+func stripBlueprintSystemFields(bp api.Blueprint) api.Blueprint {
+	cleaned := make(api.Blueprint, len(bp))
+	for k, v := range bp {
+		skip := false
+		for _, f := range blueprintSystemFields {
+			if k == f {
+				skip = true
+				break
+			}
+		}
+		if !skip {
+			cleaned[k] = v
+		}
+	}
+	return cleaned
+}
+
 // Module handles migration between Port organizations.
 type Module struct {
 	sourceClient *api.Client
@@ -723,11 +742,20 @@ func (m *Module) importToTarget(ctx context.Context, data *export.Data, diffResu
 				if identifier == "_rule_result" {
 					_, err = m.targetClient.PatchBlueprint(ctx, identifier, apiBp)
 				} else {
-					_, err = m.targetClient.UpdateBlueprint(ctx, identifier, apiBp)
+					existing, fetchErr := m.targetClient.GetBlueprint(ctx, identifier)
+					if fetchErr != nil {
+						mu.Lock()
+						result.Errors = append(result.Errors, fmt.Sprintf("Blueprint %s: %v", identifier, fetchErr))
+						mu.Unlock()
+						return nil
+					}
+					for k, v := range apiBp {
+						existing[k] = v
+					}
+					_, err = m.targetClient.UpdateBlueprint(ctx, identifier, stripBlueprintSystemFields(existing))
 				}
 				if err != nil {
 					mu.Lock()
-					// Check if it's a relation error - if so, we'll retry in second pass
 					if import_module.IsRelationError(err) {
 						failedBlueprints[identifier] = bp
 						failedBlueprintActions[identifier] = action
@@ -778,7 +806,17 @@ func (m *Module) importToTarget(ctx context.Context, data *export.Data, diffResu
 					if bpID == "_rule_result" {
 						_, err = m.targetClient.PatchBlueprint(ctx, bpID, apiBp)
 					} else {
-						_, err = m.targetClient.UpdateBlueprint(ctx, bpID, apiBp)
+						existing, fetchErr := m.targetClient.GetBlueprint(ctx, bpID)
+						if fetchErr != nil {
+							mu.Lock()
+							result.Errors = append(result.Errors, fmt.Sprintf("Blueprint %s: %v", bpID, fetchErr))
+							mu.Unlock()
+							return nil
+						}
+						for k, v := range apiBp {
+							existing[k] = v
+						}
+						_, err = m.targetClient.UpdateBlueprint(ctx, bpID, stripBlueprintSystemFields(existing))
 					}
 					if err != nil {
 						mu.Lock()
@@ -847,11 +885,12 @@ func (m *Module) importToTarget(ctx context.Context, data *export.Data, diffResu
 				for k, v := range fieldsCopy {
 					existing[k] = v
 				}
+				cleaned := stripBlueprintSystemFields(existing)
 				var updateErr error
 				if bpID == "_rule_result" {
-					_, updateErr = m.targetClient.PatchBlueprint(gCtx, bpID, api.Blueprint(existing))
+					_, updateErr = m.targetClient.PatchBlueprint(gCtx, bpID, cleaned)
 				} else {
-					_, updateErr = m.targetClient.UpdateBlueprint(gCtx, bpID, api.Blueprint(existing))
+					_, updateErr = m.targetClient.UpdateBlueprint(gCtx, bpID, cleaned)
 				}
 				if updateErr != nil {
 					mu.Lock()
@@ -920,7 +959,7 @@ func (m *Module) importToTarget(ctx context.Context, data *export.Data, diffResu
 					for k, v := range fieldsCopy {
 						existing[k] = v
 					}
-					_, updateErr := m.targetClient.UpdateBlueprint(gCtx, bpID, api.Blueprint(existing))
+					_, updateErr := m.targetClient.UpdateBlueprint(gCtx, bpID, stripBlueprintSystemFields(existing))
 					if updateErr != nil {
 						mu.Lock()
 						failedMirrorProps[bpID] = blueprintMirrorProps[bpID]
@@ -958,7 +997,7 @@ func (m *Module) importToTarget(ctx context.Context, data *export.Data, diffResu
 						return nil
 					}
 					existing["aggregationProperties"] = aggProps
-					_, updateErr := m.targetClient.UpdateBlueprint(gCtx, bpID, api.Blueprint(existing))
+					_, updateErr := m.targetClient.UpdateBlueprint(gCtx, bpID, stripBlueprintSystemFields(existing))
 					if updateErr != nil {
 						mu.Lock()
 						failedAggProps[bpID] = aggProps
@@ -1016,7 +1055,7 @@ func (m *Module) importToTarget(ctx context.Context, data *export.Data, diffResu
 						return nil
 					}
 					existing["ownership"] = ownershipVal
-					_, updateErr := m.targetClient.UpdateBlueprint(gCtx, bpID, api.Blueprint(existing))
+					_, updateErr := m.targetClient.UpdateBlueprint(gCtx, bpID, stripBlueprintSystemFields(existing))
 					if updateErr != nil {
 						mu.Lock()
 						result.Errors = append(result.Errors, fmt.Sprintf("Blueprint %s (ownership): %v", bpID, updateErr))
@@ -1086,7 +1125,7 @@ func (m *Module) importToTarget(ctx context.Context, data *export.Data, diffResu
 	}
 	entityPool.Wait()
 
-	// Import scorecards - group by blueprint for bulk updates
+	// Group scorecards by blueprint and separate into create/update
 	scorecardsToCreate := make(map[string]bool)
 	scorecardsToUpdate := make(map[string]bool)
 	for _, sc := range diffResult.ScorecardsToCreate {
@@ -1104,8 +1143,8 @@ func (m *Module) importToTarget(ctx context.Context, data *export.Data, diffResu
 		}
 	}
 
-	// Group scorecards by blueprint for bulk operations
 	scorecardsByBlueprint := make(map[string][]api.Scorecard)
+	stripFields := map[string]bool{"createdBy": true, "updatedBy": true, "createdAt": true, "updatedAt": true, "id": true, "blueprint": true, "blueprintIdentifier": true}
 	for _, scorecard := range data.Scorecards {
 		sc := scorecard
 		blueprintID, ok1 := sc["blueprintIdentifier"].(string)
@@ -1115,11 +1154,8 @@ func (m *Module) importToTarget(ctx context.Context, data *export.Data, diffResu
 		}
 
 		key := fmt.Sprintf("%s:%s", blueprintID, scorecardID)
-		// Only include scorecards that need to be created or updated
 		if scorecardsToCreate[key] || scorecardsToUpdate[key] {
-			// Strip audit/internal fields that Port rejects on create/update
 			cleaned := make(api.Scorecard)
-			stripFields := map[string]bool{"createdBy": true, "updatedBy": true, "createdAt": true, "updatedAt": true, "id": true, "blueprint": true, "blueprintIdentifier": true}
 			for k, v := range sc {
 				if !stripFields[k] {
 					cleaned[k] = v
@@ -1129,54 +1165,75 @@ func (m *Module) importToTarget(ctx context.Context, data *export.Data, diffResu
 		}
 	}
 
-	// Process scorecards grouped by blueprint
 	for blueprintID, scorecards := range scorecardsByBlueprint {
 		bpID := blueprintID
 		scs := scorecards
 		g.Go(func() error {
-			// Separate create and update operations
-			toCreate := []api.Scorecard{}
-			toUpdate := []api.Scorecard{}
-
+			var toMerge []api.Scorecard
 			for _, sc := range scs {
-				scID, ok := sc["identifier"].(string)
-				if !ok || scID == "" {
-					continue
-				}
+				scID, _ := sc["identifier"].(string)
 				key := fmt.Sprintf("%s:%s", bpID, scID)
+
 				if scorecardsToCreate[key] {
-					toCreate = append(toCreate, sc)
-				} else if scorecardsToUpdate[key] {
-					toUpdate = append(toUpdate, sc)
-				}
-			}
-
-			// Create new scorecards individually
-			for _, sc := range toCreate {
-				_, err := m.targetClient.CreateScorecard(ctx, bpID, sc)
-				if err != nil {
+					_, err := m.targetClient.CreateScorecard(ctx, bpID, sc)
+					if err != nil {
+						mu.Lock()
+						result.Errors = append(result.Errors, fmt.Sprintf("Scorecard %s: %v", scID, err))
+						mu.Unlock()
+						continue
+					}
 					mu.Lock()
-					scID, _ := sc["identifier"].(string)
-					result.Errors = append(result.Errors, fmt.Sprintf("Scorecard %s: %v", scID, err))
+					result.ScorecardsCreated++
 					mu.Unlock()
-					continue
+				} else if scorecardsToUpdate[key] {
+					toMerge = append(toMerge, sc)
 				}
-				mu.Lock()
-				result.ScorecardsCreated++
-				mu.Unlock()
 			}
 
-			// Update existing scorecards using bulk PUT endpoint
-			if len(toUpdate) > 0 {
-				_, err := m.targetClient.UpdateScorecards(ctx, bpID, toUpdate)
-				if err != nil {
+			// Port has no PATCH endpoint for individual scorecards, so we
+			// fetch the full set, merge in our updates, and bulk PUT.
+			if len(toMerge) > 0 {
+				existing, fetchErr := m.targetClient.GetScorecards(ctx, bpID)
+				if fetchErr != nil {
 					mu.Lock()
-					result.Errors = append(result.Errors, fmt.Sprintf("Scorecards for blueprint %s: %v", bpID, err))
+					result.Errors = append(result.Errors, fmt.Sprintf("Scorecards fetch %s: %v", bpID, fetchErr))
 					mu.Unlock()
 					return nil
 				}
+
+				mergeSet := make(map[string]api.Scorecard, len(toMerge))
+				for _, sc := range toMerge {
+					mergeSet[sc["identifier"].(string)] = sc
+				}
+
+				stripFields := map[string]bool{"createdBy": true, "updatedBy": true, "createdAt": true, "updatedAt": true, "id": true, "blueprint": true, "blueprintIdentifier": true}
+				merged := make([]api.Scorecard, 0, len(existing))
+				for _, ex := range existing {
+					exID, _ := ex["identifier"].(string)
+					if replacement, ok := mergeSet[exID]; ok {
+						merged = append(merged, replacement)
+						delete(mergeSet, exID)
+					} else {
+						cleaned := make(api.Scorecard)
+						for k, v := range ex {
+							if !stripFields[k] {
+								cleaned[k] = v
+							}
+						}
+						merged = append(merged, cleaned)
+					}
+				}
+				for _, sc := range mergeSet {
+					merged = append(merged, sc)
+				}
+
+				_, putErr := m.targetClient.UpdateScorecards(ctx, bpID, merged)
 				mu.Lock()
-				result.ScorecardsUpdated += len(toUpdate)
+				if putErr != nil {
+					result.Errors = append(result.Errors, fmt.Sprintf("Scorecards bulk-put %s: %v", bpID, putErr))
+				} else {
+					result.ScorecardsUpdated += len(toMerge)
+				}
 				mu.Unlock()
 			}
 
