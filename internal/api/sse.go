@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
+	"time"
 
 	"github.com/port-experimental/port-cli/internal/useragent"
 )
@@ -49,7 +51,7 @@ func (c *Client) requestStream(ctx context.Context, method, path string, data an
 		return nil, err
 	}
 
-	url := fmt.Sprintf("%s%s", c.apiURL, path)
+	endpoint := fmt.Sprintf("%s%s", c.apiURL, path)
 
 	var reqBody io.Reader
 	if data != nil {
@@ -60,7 +62,7 @@ func (c *Client) requestStream(ctx context.Context, method, path string, data an
 		reqBody = bytes.NewBuffer(jsonData)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, url, reqBody)
+	req, err := http.NewRequestWithContext(ctx, method, endpoint, reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create stream request: %w", err)
 	}
@@ -75,7 +77,9 @@ func (c *Client) requestStream(ctx context.Context, method, path string, data an
 	// (gzip-encoded SSE is not progressively decodable).
 	streamClient := &http.Client{
 		Transport: &http.Transport{
-			DisableCompression: true,
+			DisableCompression:    true,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ResponseHeaderTimeout: 30 * time.Second,
 		},
 	}
 
@@ -85,9 +89,22 @@ func (c *Client) requestStream(ctx context.Context, method, path string, data an
 	}
 
 	if resp.StatusCode >= 400 {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		resp.Body.Close()
-		return nil, fmt.Errorf("agent invoke failed (%s): %s", resp.Status, strings.TrimSpace(string(body)))
+		// Try to extract just the error message from the JSON response body.
+		var apiErr struct {
+			Message string `json:"message"`
+			Error   string `json:"error"`
+		}
+		if jsonErr := json.Unmarshal(body, &apiErr); jsonErr == nil {
+			if apiErr.Message != "" {
+				return nil, fmt.Errorf("agent invoke failed (%s): %s", resp.Status, apiErr.Message)
+			}
+			if apiErr.Error != "" {
+				return nil, fmt.Errorf("agent invoke failed (%s): %s", resp.Status, apiErr.Error)
+			}
+		}
+		return nil, fmt.Errorf("agent invoke failed (%s)", resp.Status)
 	}
 
 	return resp, nil
@@ -98,13 +115,17 @@ func (c *Client) requestStream(ctx context.Context, method, path string, data an
 // Returns nil on clean completion, ctx.Err() on cancellation, or a stream error.
 func (c *Client) InvokeAgent(ctx context.Context, agentID, prompt string, events chan<- SSEEvent) error {
 	body := map[string]string{"prompt": prompt}
-	resp, err := c.requestStream(ctx, "POST", fmt.Sprintf("/agent/%s/invoke", agentID), body)
+	resp, err := c.requestStream(ctx, "POST", fmt.Sprintf("/agent/%s/invoke", url.PathEscape(agentID)), body)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 
 	scanner := bufio.NewScanner(resp.Body)
+	// Increase scanner buffer to handle large SSE payloads (e.g. done events with HCL output).
+	// Default 64 KiB is insufficient for AI agent responses; 1 MiB covers typical outputs.
+	const maxSSELineBytes = 1 * 1024 * 1024 // 1 MiB
+	scanner.Buffer(make([]byte, 0, 64*1024), maxSSELineBytes)
 	for scanner.Scan() {
 		line := scanner.Text()
 		event, _ := ParseSSELine(line)

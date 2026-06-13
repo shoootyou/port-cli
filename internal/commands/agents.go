@@ -88,7 +88,7 @@ Examples:
 			var onProgress func(string, json.RawMessage)
 			if raw {
 				onProgress = func(eventType string, payload json.RawMessage) {
-					enc := json.NewEncoder(os.Stderr)
+					enc := json.NewEncoder(os.Stdout)
 					_ = enc.Encode(map[string]any{
 						"type":    eventType,
 						"payload": payload,
@@ -133,6 +133,12 @@ Examples:
 				}
 				lipgloss.Fprintf(os.Stderr,
 					"\nRe-invoke with a prompt that answers the questions above.\n")
+				// Exit non-zero so callers and scripts can detect that more input is required.
+				// os.Exit(1) is used directly (matching the pattern in compare.go) because
+				// cobra.ErrSilent does not exist in cobra v1.9.1 and the user-friendly
+				// message has already been printed to stderr above.
+				os.Exit(1)
+				return nil // unreachable; satisfies the error return type
 			}
 
 			switch strings.ToLower(output) {
@@ -146,14 +152,18 @@ Examples:
 					"contextUsage":      result.ContextUsage,
 				}, "json")
 			default:
-				fmt.Println(result.Output)
+				if !raw {
+					if result.Output != "" {
+						fmt.Println(result.Output)
+					}
+				}
 			}
 			return nil
 		},
 	}
 
 	cmd.Flags().StringVar(&org, "org", "", "Organization name (uses default if not specified)")
-	cmd.Flags().BoolVar(&raw, "raw", false, "Dump all SSE events as JSON to stderr (for debugging)")
+	cmd.Flags().BoolVar(&raw, "raw", false, "Dump all SSE events as newline-delimited JSON to stdout (for scripting/debugging)")
 	cmd.Flags().StringVarP(&output, "output", "o", "text", "Output format: text, json")
 
 	return cmd
