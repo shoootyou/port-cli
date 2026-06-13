@@ -16,9 +16,16 @@ import (
 )
 
 // SSEEvent represents a single parsed Server-Sent Event from the Port Agent API.
+//
+// Data holds the raw data field value (plain text or JSON string) — populated by
+// ParseSSEBlock and InvokeAgent (multi-field SSE format used by the real Port API).
+//
+// Payload is the legacy structured payload field populated by ParseSSELine (single
+// data-line JSON format). It exists so that existing ParseSSELine tests keep passing.
 type SSEEvent struct {
 	Type    string          `json:"type"`
-	Payload json.RawMessage `json:"payload,omitempty"`
+	Data    string          // raw data field — plain text or JSON string
+	Payload json.RawMessage `json:"payload,omitempty"` // legacy: used by ParseSSELine only
 }
 
 // ParseSSELine parses a single SSE line (e.g. "data: {...}") into an SSEEvent.
@@ -38,6 +45,33 @@ func ParseSSELine(line string) (*SSEEvent, error) {
 		return nil, nil
 	}
 	return &event, nil
+}
+
+// ParseSSEBlock parses a slice of non-empty SSE lines (one event block between blank-line separators)
+// into an SSEEvent. Returns nil for empty input or blocks with no data lines.
+// Lines starting with ':' (comments), 'id:', or 'retry:' are silently ignored.
+func ParseSSEBlock(lines []string) *SSEEvent {
+	var eventType string
+	var dataLines []string
+	for _, line := range lines {
+		if strings.HasPrefix(line, "event: ") {
+			eventType = strings.TrimPrefix(line, "event: ")
+		} else if strings.HasPrefix(line, "event:") {
+			eventType = strings.TrimPrefix(line, "event:")
+		} else if strings.HasPrefix(line, "data: ") {
+			dataLines = append(dataLines, strings.TrimPrefix(line, "data: "))
+		} else if strings.HasPrefix(line, "data:") {
+			dataLines = append(dataLines, strings.TrimPrefix(line, "data:"))
+		}
+		// ignore :comments, id:, retry:
+	}
+	if eventType == "" || len(dataLines) == 0 {
+		return nil
+	}
+	return &SSEEvent{
+		Type: eventType,
+		Data: strings.Join(dataLines, "\n"),
+	}
 }
 
 // requestStream makes an authenticated POST request and returns the raw *http.Response
@@ -121,26 +155,37 @@ func (c *Client) InvokeAgent(ctx context.Context, agentID, prompt string, events
 	}
 	defer resp.Body.Close()
 
+	const maxSSELineBytes = 1 * 1024 * 1024
 	scanner := bufio.NewScanner(resp.Body)
-	// Increase scanner buffer to handle large SSE payloads (e.g. done events with HCL output).
-	// Default 64 KiB is insufficient for AI agent responses; 1 MiB covers typical outputs.
-	const maxSSELineBytes = 1 * 1024 * 1024 // 1 MiB
 	scanner.Buffer(make([]byte, 0, 64*1024), maxSSELineBytes)
+
+	var blockLines []string
 	for scanner.Scan() {
 		line := scanner.Text()
-		event, _ := ParseSSELine(line)
-		if event == nil {
+		if line == "" {
+			// End of SSE block — parse and emit
+			if event := ParseSSEBlock(blockLines); event != nil {
+				select {
+				case events <- *event:
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+				if event.Type == "done" {
+					return nil
+				}
+			}
+			blockLines = blockLines[:0]
 			continue
 		}
+		blockLines = append(blockLines, line)
+	}
 
+	// Flush last block if server closed without trailing blank line.
+	if event := ParseSSEBlock(blockLines); event != nil {
 		select {
 		case events <- *event:
 		case <-ctx.Done():
 			return ctx.Err()
-		}
-
-		if event.Type == "done" {
-			return nil
 		}
 	}
 

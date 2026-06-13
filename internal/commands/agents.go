@@ -85,32 +85,57 @@ Examples:
 			lipgloss.Fprintf(os.Stderr, "%s Invoking agent %s…\n",
 				styles.CheckMark, styles.Bold.Render(agentID))
 
-			var onProgress func(string, json.RawMessage)
+			executionStarted := false
+
+			var onProgress func(string, string)
 			if raw {
-				onProgress = func(eventType string, payload json.RawMessage) {
+				onProgress = func(eventType string, data string) {
 					enc := json.NewEncoder(os.Stdout)
 					_ = enc.Encode(map[string]any{
-						"type":    eventType,
-						"payload": payload,
+						"type": eventType,
+						"data": data,
 					})
 				}
 			} else {
-				onProgress = func(eventType string, payload json.RawMessage) {
+				onProgress = func(eventType string, data string) {
 					switch eventType {
+					case "invocationIdentifier":
+						// data is plain UUID string
+						lipgloss.Fprintf(os.Stderr, "  › ID: %s\n", data)
 					case "waiting":
 						lipgloss.Fprintf(os.Stderr, "  %s waiting…\n", styles.Circle)
 					case "execution":
-						lipgloss.Fprintf(os.Stderr, "  %s executing…\n", styles.Circle)
+						if !executionStarted {
+							lipgloss.Fprintf(os.Stderr, "  %s executing…\n", styles.Circle)
+							executionStarted = true
+						}
 					case "toolPrep", "toolCall":
 						var p struct {
-							ToolName string `json:"toolName"`
+							Name string `json:"name"`
 						}
-						if json.Unmarshal(payload, &p) == nil && p.ToolName != "" {
+						if json.Unmarshal([]byte(data), &p) == nil && p.Name != "" {
 							lipgloss.Fprintf(os.Stderr, "  %s tool: %s\n",
-								styles.Circle, styles.Bold.Render(p.ToolName))
+								styles.Circle, styles.Bold.Render(p.Name))
 						}
 					case "done":
-						lipgloss.Fprintf(os.Stderr, "%s done\n", styles.CheckMark)
+						var p struct {
+							MonthlyQuotaUsage struct {
+								RemainingQuota int `json:"remainingQuota"`
+								MonthlyLimit   int `json:"monthlyLimit"`
+							} `json:"monthlyQuotaUsage"`
+						}
+						if err := json.Unmarshal([]byte(data), &p); err == nil && p.MonthlyQuotaUsage.MonthlyLimit > 0 {
+							remaining := p.MonthlyQuotaUsage.RemainingQuota
+							if remaining < 0 {
+								remaining = 0
+							}
+							lipgloss.Fprintf(os.Stderr, "%s done  [quota: %d/%d remaining]\n",
+								styles.CheckMark,
+								remaining,
+								p.MonthlyQuotaUsage.MonthlyLimit)
+						} else {
+							lipgloss.Fprintf(os.Stderr, "%s done\n", styles.CheckMark)
+						}
 					}
 				}
 			}

@@ -11,7 +11,7 @@ import (
 
 // InvokeResult holds the processed output of an agent invocation.
 type InvokeResult struct {
-	// Output is the agent's final text response (from the "done" event).
+	// Output is the agent's final text response, accumulated from "execution" chunks.
 	Output string
 	// InvocationID is the identifier assigned by Port to this invocation.
 	InvocationID string
@@ -34,7 +34,7 @@ type InvokeOptions struct {
 	Prompt string
 	// OnProgress is called for each SSE event as it arrives (optional).
 	// Useful for streaming progress to the terminal.
-	OnProgress func(eventType string, payload json.RawMessage)
+	OnProgress func(eventType string, data string)
 }
 
 // Invoke calls a Port AI Agent and returns the processed result.
@@ -51,7 +51,7 @@ func Invoke(ctx context.Context, client *api.Client, opts InvokeOptions) (*Invok
 
 	for event := range events {
 		if opts.OnProgress != nil {
-			opts.OnProgress(event.Type, event.Payload)
+			opts.OnProgress(event.Type, event.Data)
 		}
 		if err := processEvent(event, result); err != nil {
 			return nil, fmt.Errorf("processing event %q: %w", event.Type, err)
@@ -69,22 +69,20 @@ func Invoke(ctx context.Context, client *api.Client, opts InvokeOptions) (*Invok
 func processEvent(event api.SSEEvent, result *InvokeResult) error {
 	switch event.Type {
 	case "invocationIdentifier":
-		var p struct {
-			InvocationIdentifier string `json:"invocationIdentifier"`
-		}
-		if err := json.Unmarshal(event.Payload, &p); err == nil {
-			result.InvocationID = p.InvocationIdentifier
-		}
+		result.InvocationID = event.Data
+
+	case "execution":
+		result.Output += event.Data
 
 	case "toolCall":
 		var p struct {
-			ToolName string          `json:"toolName"`
-			Args     json.RawMessage `json:"args"`
+			Name string          `json:"name"`
+			Args json.RawMessage `json:"arguments"`
 		}
-		if err := json.Unmarshal(event.Payload, &p); err != nil {
-			return nil
+		if err := json.Unmarshal([]byte(event.Data), &p); err != nil {
+			return nil // skip malformed toolCall
 		}
-		if p.ToolName == "ask_user_questions" {
+		if p.Name == "ask_user_questions" {
 			var args struct {
 				Questions []string `json:"questions"`
 			}
@@ -95,15 +93,13 @@ func processEvent(event api.SSEEvent, result *InvokeResult) error {
 
 	case "done":
 		var p struct {
-			Output            string         `json:"output"`
 			MonthlyQuotaUsage map[string]any `json:"monthlyQuotaUsage"`
 			RateLimitUsage    map[string]any `json:"rateLimitUsage"`
 			ContextUsage      map[string]any `json:"contextUsage"`
 		}
-		if err := json.Unmarshal(event.Payload, &p); err != nil {
+		if err := json.Unmarshal([]byte(event.Data), &p); err != nil {
 			return fmt.Errorf("failed to decode done payload: %w", err)
 		}
-		result.Output = p.Output
 		result.MonthlyQuotaUsage = p.MonthlyQuotaUsage
 		result.RateLimitUsage = p.RateLimitUsage
 		result.ContextUsage = p.ContextUsage

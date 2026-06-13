@@ -130,3 +130,146 @@ func TestParseSSELine_InvocationIdentifierEvent(t *testing.T) {
 		t.Errorf("expected type %q, got %q", "invocationIdentifier", event.Type)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// ParseSSEBlock tests — RED PHASE
+// ParseSSEBlock does not exist yet; all tests below must FAIL until Kou
+// implements it.
+// ---------------------------------------------------------------------------
+
+func TestParseSSEBlock_InvocationIdentifier(t *testing.T) {
+	lines := []string{
+		"event: invocationIdentifier",
+		"data: 29ca2424-ee5d-418f-9edb-6696510b9701",
+	}
+	got := ParseSSEBlock(lines)
+	if got == nil {
+		t.Fatal("want non-nil SSEEvent, got nil")
+	}
+	if got.Type != "invocationIdentifier" {
+		t.Errorf("want Type %q, got %q", "invocationIdentifier", got.Type)
+	}
+	if got.Data != "29ca2424-ee5d-418f-9edb-6696510b9701" {
+		t.Errorf("want Data %q, got %q", "29ca2424-ee5d-418f-9edb-6696510b9701", got.Data)
+	}
+}
+
+func TestParseSSEBlock_Execution(t *testing.T) {
+	lines := []string{
+		"event: execution",
+		"data: texto del agente",
+	}
+	got := ParseSSEBlock(lines)
+	if got == nil {
+		t.Fatal("want non-nil SSEEvent, got nil")
+	}
+	if got.Type != "execution" {
+		t.Errorf("want Type %q, got %q", "execution", got.Type)
+	}
+	if got.Data != "texto del agente" {
+		t.Errorf("want Data %q, got %q", "texto del agente", got.Data)
+	}
+}
+
+func TestParseSSEBlock_Done(t *testing.T) {
+	doneJSON := `{"rateLimitUsage":{},"monthlyQuotaUsage":{"monthlyLimit":500,"remainingQuota":495},"contextUsage":{}}`
+	lines := []string{
+		"event: done",
+		"data: " + doneJSON,
+	}
+	got := ParseSSEBlock(lines)
+	if got == nil {
+		t.Fatal("want non-nil SSEEvent, got nil")
+	}
+	if got.Type != "done" {
+		t.Errorf("want Type %q, got %q", "done", got.Type)
+	}
+	if got.Data != doneJSON {
+		t.Errorf("want Data %q, got %q", doneJSON, got.Data)
+	}
+}
+
+func TestParseSSEBlock_WaitingNullData(t *testing.T) {
+	lines := []string{
+		"event: waiting",
+		"data: null",
+	}
+	got := ParseSSEBlock(lines)
+	if got == nil {
+		t.Fatal("want non-nil SSEEvent, got nil")
+	}
+	if got.Type != "waiting" {
+		t.Errorf("want Type %q, got %q", "waiting", got.Type)
+	}
+	if got.Data != "null" {
+		t.Errorf("want Data %q, got %q", "null", got.Data)
+	}
+}
+
+func TestParseSSEBlock_MultiLineData(t *testing.T) {
+	lines := []string{
+		"event: execution",
+		"data: primera línea",
+		"data: segunda línea",
+	}
+	got := ParseSSEBlock(lines)
+	if got == nil {
+		t.Fatal("want non-nil SSEEvent, got nil")
+	}
+	want := "primera línea\nsegunda línea"
+	if got.Data != want {
+		t.Errorf("want Data %q, got %q", want, got.Data)
+	}
+}
+
+func TestParseSSEBlock_CommentIgnored(t *testing.T) {
+	lines := []string{
+		": this is a comment",
+		"event: execution",
+		"data: respuesta",
+	}
+	got := ParseSSEBlock(lines)
+	if got == nil {
+		t.Fatal("want non-nil SSEEvent, got nil")
+	}
+	if got.Type != "execution" {
+		t.Errorf("want Type %q, got %q", "execution", got.Type)
+	}
+	if got.Data != "respuesta" {
+		t.Errorf("want Data %q, got %q", "respuesta", got.Data)
+	}
+}
+
+func TestParseSSEBlock_EmptyLines(t *testing.T) {
+	got := ParseSSEBlock([]string{})
+	if got != nil {
+		t.Errorf("want nil for empty input, got %+v", got)
+	}
+}
+
+func TestParseSSEBlock_OnlyEventNoData(t *testing.T) {
+	lines := []string{
+		"event: execution",
+	}
+	got := ParseSSEBlock(lines)
+	if got != nil {
+		t.Errorf("want nil when block has no data field, got %+v", got)
+	}
+}
+
+func TestParseSSEBlock_Ping(t *testing.T) {
+	lines := []string{
+		"event: ping",
+		"data: {}",
+	}
+	got := ParseSSEBlock(lines)
+	if got == nil {
+		t.Fatal("want non-nil SSEEvent, got nil")
+	}
+	if got.Type != "ping" {
+		t.Errorf("want Type %q, got %q", "ping", got.Type)
+	}
+	if got.Data != "{}" {
+		t.Errorf("want Data %q, got %q", "{}", got.Data)
+	}
+}

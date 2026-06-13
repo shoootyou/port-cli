@@ -1,143 +1,193 @@
 package agents
 
+// RED PHASE — all tests in this file MUST FAIL until Kou implements the new
+// SSEEvent{Type, Data string} design and the updated processEvent signature.
+//
+// Compilation errors are expected: SSEEvent currently has Payload json.RawMessage,
+// not Data string. That is intentional — the test file encodes the target contract.
+
 import (
-	"encoding/json"
 	"testing"
 
 	"github.com/port-experimental/port-cli/internal/api"
 )
 
-func makeEvent(t *testing.T, eventType string, payload any) api.SSEEvent {
-	t.Helper()
-	raw, err := json.Marshal(payload)
-	if err != nil {
-		t.Fatalf("failed to marshal payload: %v", err)
-	}
-	return api.SSEEvent{Type: eventType, Payload: json.RawMessage(raw)}
-}
+// ---------------------------------------------------------------------------
+// invocationIdentifier
+// ---------------------------------------------------------------------------
 
 func TestProcessEvent_InvocationIdentifier(t *testing.T) {
 	result := &InvokeResult{}
-	event := makeEvent(t, "invocationIdentifier", map[string]any{
-		"invocationIdentifier": "inv_abc123",
-	})
+	event := api.SSEEvent{Type: "invocationIdentifier", Data: "test-uuid"}
 	if err := processEvent(event, result); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if result.InvocationID != "inv_abc123" {
-		t.Errorf("expected InvocationID %q, got %q", "inv_abc123", result.InvocationID)
+	if result.InvocationID != "test-uuid" {
+		t.Errorf("want InvocationID %q, got %q", "test-uuid", result.InvocationID)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// execution — plain-text chunks that accumulate into Output
+// ---------------------------------------------------------------------------
+
+func TestProcessEvent_Execution_Single(t *testing.T) {
+	result := &InvokeResult{}
+	event := api.SSEEvent{Type: "execution", Data: "hola"}
+	if err := processEvent(event, result); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Output != "hola" {
+		t.Errorf("want Output %q, got %q", "hola", result.Output)
+	}
+}
+
+func TestProcessEvent_Execution_Accumulates(t *testing.T) {
+	result := &InvokeResult{}
+
+	e1 := api.SSEEvent{Type: "execution", Data: "hola "}
+	if err := processEvent(e1, result); err != nil {
+		t.Fatalf("unexpected error on first chunk: %v", err)
+	}
+
+	e2 := api.SSEEvent{Type: "execution", Data: "mundo"}
+	if err := processEvent(e2, result); err != nil {
+		t.Fatalf("unexpected error on second chunk: %v", err)
+	}
+
+	if result.Output != "hola mundo" {
+		t.Errorf("want Output %q, got %q", "hola mundo", result.Output)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// done — JSON with quota fields, NO output field
+// ---------------------------------------------------------------------------
+
+func TestProcessEvent_Done_SetsQuota(t *testing.T) {
+	result := &InvokeResult{}
+	event := api.SSEEvent{
+		Type: "done",
+		Data: `{"monthlyQuotaUsage":{"monthlyLimit":500,"remainingQuota":495},"rateLimitUsage":{},"contextUsage":{}}`,
+	}
+	if err := processEvent(event, result); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.MonthlyQuotaUsage == nil {
+		t.Fatal("want MonthlyQuotaUsage to be set, got nil")
+	}
+}
+
+func TestProcessEvent_Done_NoOutputField(t *testing.T) {
+	// The real "done" event carries no "output" field.
+	// Processing it must NOT set result.Output.
+	result := &InvokeResult{}
+	// Simulate accumulated output from execution chunks.
+	result.Output = "texto acumulado"
+	event := api.SSEEvent{
+		Type: "done",
+		Data: `{"monthlyQuotaUsage":{}}`,
+	}
+	if err := processEvent(event, result); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// done must not overwrite the accumulated Output.
+	if result.Output != "texto acumulado" {
+		t.Errorf("want Output %q (unchanged), got %q", "texto acumulado", result.Output)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// toolCall — JSON with "name" and "arguments" (not "toolName"/"args")
+// ---------------------------------------------------------------------------
 
 func TestProcessEvent_ToolCall_AskUserQuestions(t *testing.T) {
 	result := &InvokeResult{}
-	event := makeEvent(t, "toolCall", map[string]any{
-		"toolName": "ask_user_questions",
-		"args": map[string]any{
-			"questions": []string{"What region?", "Which tier?"},
-		},
-	})
+	event := api.SSEEvent{
+		Type: "toolCall",
+		Data: `{"name":"ask_user_questions","arguments":{"questions":["¿Qué región?","¿Qué SKU?"]}}`,
+	}
 	if err := processEvent(event, result); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(result.AskUserQuestions) != 2 {
-		t.Fatalf("expected 2 questions, got %d", len(result.AskUserQuestions))
+		t.Fatalf("want 2 questions, got %d", len(result.AskUserQuestions))
 	}
-	if result.AskUserQuestions[0] != "What region?" {
-		t.Errorf("expected first question %q, got %q", "What region?", result.AskUserQuestions[0])
+	if result.AskUserQuestions[0] != "¿Qué región?" {
+		t.Errorf("want first question %q, got %q", "¿Qué región?", result.AskUserQuestions[0])
 	}
-	if result.AskUserQuestions[1] != "Which tier?" {
-		t.Errorf("expected second question %q, got %q", "Which tier?", result.AskUserQuestions[1])
+	if result.AskUserQuestions[1] != "¿Qué SKU?" {
+		t.Errorf("want second question %q, got %q", "¿Qué SKU?", result.AskUserQuestions[1])
 	}
 }
 
-func TestProcessEvent_ToolCall_OtherTool_NoChange(t *testing.T) {
+func TestProcessEvent_ToolCall_OtherName(t *testing.T) {
 	result := &InvokeResult{}
-	event := makeEvent(t, "toolCall", map[string]any{
-		"toolName": "search_entities",
-		"args":     map[string]any{},
-	})
+	event := api.SSEEvent{
+		Type: "toolCall",
+		Data: `{"name":"create_entity","arguments":{}}`,
+	}
 	if err := processEvent(event, result); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(result.AskUserQuestions) != 0 {
-		t.Errorf("expected no questions, got %d", len(result.AskUserQuestions))
-	}
-	if result.Output != "" {
-		t.Errorf("expected empty output, got %q", result.Output)
+	if result.AskUserQuestions != nil {
+		t.Errorf("want AskUserQuestions nil, got %v", result.AskUserQuestions)
 	}
 }
 
-func TestProcessEvent_Done(t *testing.T) {
+// ---------------------------------------------------------------------------
+// waiting — data is the string literal "null"; must be a no-op
+// ---------------------------------------------------------------------------
+
+func TestProcessEvent_Waiting_NoChange(t *testing.T) {
 	result := &InvokeResult{}
-	event := makeEvent(t, "done", map[string]any{
-		"output": "final answer here",
-		"monthlyQuotaUsage": map[string]any{
-			"used":  float64(5),
-			"limit": float64(100),
-		},
-		"rateLimitUsage": map[string]any{
-			"used": float64(1),
-		},
-		"contextUsage": map[string]any{
-			"tokens": float64(1234),
-		},
-	})
+	event := api.SSEEvent{Type: "waiting", Data: "null"}
 	if err := processEvent(event, result); err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("want no error for waiting event, got %v", err)
 	}
-	if result.Output != "final answer here" {
-		t.Errorf("expected output %q, got %q", "final answer here", result.Output)
-	}
-	if result.MonthlyQuotaUsage == nil {
-		t.Error("expected MonthlyQuotaUsage to be set")
-	}
-	if result.RateLimitUsage == nil {
-		t.Error("expected RateLimitUsage to be set")
-	}
-	if result.ContextUsage == nil {
-		t.Error("expected ContextUsage to be set")
+	if result.Output != "" || result.InvocationID != "" || result.AskUserQuestions != nil {
+		t.Error("want result unchanged after waiting event")
 	}
 }
 
-func TestProcessEvent_UnknownEventType_NoError(t *testing.T) {
+// ---------------------------------------------------------------------------
+// unknown event types — must be silently ignored
+// ---------------------------------------------------------------------------
+
+func TestProcessEvent_Unknown_NoError(t *testing.T) {
 	result := &InvokeResult{}
-	event := makeEvent(t, "someUnknownEvent", map[string]any{"foo": "bar"})
+	event := api.SSEEvent{Type: "unknown_type", Data: "anything"}
 	if err := processEvent(event, result); err != nil {
-		t.Errorf("unexpected error for unknown event type: %v", err)
+		t.Errorf("want nil error for unknown event type, got %v", err)
 	}
-	// No fields should be set
-	if result.Output != "" || result.InvocationID != "" || len(result.AskUserQuestions) != 0 {
-		t.Error("expected result to be unchanged for unknown event type")
+	if result.Output != "" || result.InvocationID != "" || result.AskUserQuestions != nil {
+		t.Error("want result unchanged after unknown event")
 	}
 }
 
-func TestProcessEvent_AskUserQuestions_MultipleCallsAppend(t *testing.T) {
+func TestProcessEvent_ToolCall_AskUserQuestions_MultipleAppend(t *testing.T) {
 	result := &InvokeResult{}
-
-	// First toolCall
-	event1 := makeEvent(t, "toolCall", map[string]any{
-		"toolName": "ask_user_questions",
-		"args": map[string]any{
-			"questions": []string{"First question?"},
-		},
-	})
-	if err := processEvent(event1, result); err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	e1 := api.SSEEvent{
+		Type: "toolCall",
+		Data: `{"name":"ask_user_questions","arguments":{"questions":["¿Región?"]}}`,
 	}
-
-	// Second toolCall appends to existing questions
-	event2 := makeEvent(t, "toolCall", map[string]any{
-		"toolName": "ask_user_questions",
-		"args": map[string]any{
-			"questions": []string{"Second question?"},
-		},
-	})
-	if err := processEvent(event2, result); err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	e2 := api.SSEEvent{
+		Type: "toolCall",
+		Data: `{"name":"ask_user_questions","arguments":{"questions":["¿SKU?","¿Tamaño?"]}}`,
 	}
-
-	if len(result.AskUserQuestions) != 2 {
-		t.Errorf("expected 2 questions after two calls, got %d", len(result.AskUserQuestions))
+	if err := processEvent(e1, result); err != nil {
+		t.Fatalf("unexpected error on e1: %v", err)
+	}
+	if err := processEvent(e2, result); err != nil {
+		t.Fatalf("unexpected error on e2: %v", err)
+	}
+	want := []string{"¿Región?", "¿SKU?", "¿Tamaño?"}
+	if len(result.AskUserQuestions) != len(want) {
+		t.Fatalf("got %d questions, want %d: %v", len(result.AskUserQuestions), len(want), result.AskUserQuestions)
+	}
+	for i, q := range result.AskUserQuestions {
+		if q != want[i] {
+			t.Errorf("question[%d]: got %q, want %q", i, q, want[i])
+		}
 	}
 }
