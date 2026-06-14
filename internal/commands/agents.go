@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 
 	"charm.land/lipgloss/v2"
@@ -323,11 +324,12 @@ func registerAgentGet() *cobra.Command {
 			default:
 				e := result.Entity
 
-				// Collect property keys for display.
+				// Collect property keys for display in deterministic order.
 				propKeys := make([]string, 0, len(e.Properties))
 				for k := range e.Properties {
 					propKeys = append(propKeys, k)
 				}
+				sort.Strings(propKeys)
 
 				fmt.Printf("Identifier:  %s\n", e.Identifier)
 				fmt.Printf("Title:       %s\n", e.Title)

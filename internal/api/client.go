@@ -224,8 +224,15 @@ func (c *Client) request(ctx context.Context, method, path string, data any, par
 			body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 			resp.Body.Close()
 
-			// Create more descriptive error message
 			statusText := resp.Status
+
+			// For 401 Unauthorized, omit the response body from the error message to avoid
+			// leaking credential material that may be reflected by the auth provider.
+			if resp.StatusCode == http.StatusUnauthorized {
+				return nil, fmt.Errorf("API request to %s %s failed: %s", url, method, statusText)
+			}
+
+			// Create more descriptive error message
 			bodyStr := string(body)
 			if bodyStr != "" {
 				return nil, fmt.Errorf("API request to %s %s failed: %s. Body: %s", url, method, statusText, bodyStr)
