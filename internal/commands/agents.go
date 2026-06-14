@@ -210,7 +210,17 @@ func registerAgentList() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List all Port AI Agents in the organization",
-		Args:  cobra.NoArgs,
+		Long: `List all Port AI Agents registered in your organization.
+
+Displays a table with each agent's identifier and title. Use --output json or
+--output yaml to retrieve the full agent payload including blueprint, timestamps,
+and properties.
+
+Examples:
+  port agents list
+  port agents list --output json
+  port agents list --output yaml`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			flags := GetGlobalFlags(cmd.Context())
 			configManager := config.NewConfigManager(flags.ConfigFile)
@@ -297,7 +307,18 @@ func registerAgentGet() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "get <agent-id>",
 		Short: "Get a Port AI Agent by identifier",
-		Args:  cobra.ExactArgs(1),
+		Long: `Show full details for a single Port AI Agent.
+
+Prints the agent's identifier, title, blueprint, timestamps, and property keys.
+If the agent has a system prompt property (prompt, system_prompt, systemPrompt,
+or instructions), a preview of up to 300 characters is shown in table mode.
+
+Use --output json or --output yaml to retrieve the complete agent payload.
+
+Examples:
+  port agents get triage_agent
+  port agents get triage_agent --output json`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			agentID := args[0]
 
@@ -405,7 +426,19 @@ func registerAgentUpdate() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "update <agent-id>",
 		Short: "Update a Port AI Agent's system prompt",
-		Args:  cobra.ExactArgs(1),
+		Long: `Replace the system prompt of an existing Port AI Agent.
+
+Reads the new prompt from a local file (--prompt-file) and PATCHes the agent
+entity in Port. The file should contain plain text — the entire contents will
+become the agent's new system prompt.
+
+Use --output json or --output yaml to get the updated agent entity as structured
+output.
+
+Examples:
+  port agents update triage_agent --prompt-file ./prompt.txt
+  port agents update triage_agent --prompt-file ./prompt.txt --output json`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			agentID := args[0]
 
