@@ -247,26 +247,41 @@ func registerAgentList() *cobra.Command {
 				return fmt.Errorf("failed to list agents: %w", err)
 			}
 
+			agentsData := make([]map[string]interface{}, len(result.Entities))
+			for i, a := range result.Entities {
+				agentsData[i] = map[string]interface{}{
+					"identifier": a.Identifier,
+					"title":      a.Title,
+					"blueprint":  a.Blueprint,
+					"createdAt":  a.CreatedAt,
+					"updatedAt":  a.UpdatedAt,
+					"properties": a.Properties,
+				}
+			}
+
 			switch strings.ToLower(output) {
-			case "json":
-				return formatOutput(map[string]any{"agents": result.Entities}, "json")
-			default:
+			case "json", "yaml":
+				return formatOutput(map[string]interface{}{"agents": agentsData}, strings.ToLower(output))
+			default: // table
 				if len(result.Entities) == 0 {
 					fmt.Println("(no agents found)")
 					return nil
 				}
-				w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
+				w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+				fmt.Fprintln(w, "IDENTIFIER\tTITLE")
+				fmt.Fprintln(w, "──────────────────────────────\t──────────────────────────────────────")
 				for _, a := range result.Entities {
 					fmt.Fprintf(w, "%s\t%s\n", a.Identifier, a.Title)
 				}
 				w.Flush()
+				fmt.Printf("\n%d agents\n", len(result.Entities))
 			}
 			return nil
 		},
 	}
 
 	cmd.Flags().StringVar(&org, "org", "", "Organization name (uses default if not specified)")
-	cmd.Flags().StringVarP(&output, "output", "o", "text", "Output format: text, json")
+	cmd.Flags().StringVarP(&output, "output", "o", "table", "Output format: table, json, yaml")
 
 	return cmd
 }
@@ -321,10 +336,19 @@ func registerAgentGet() *cobra.Command {
 				return fmt.Errorf("failed to get agent: %w", err)
 			}
 
+			entityData := map[string]interface{}{
+				"identifier": result.Entity.Identifier,
+				"title":      result.Entity.Title,
+				"blueprint":  result.Entity.Blueprint,
+				"createdAt":  result.Entity.CreatedAt,
+				"updatedAt":  result.Entity.UpdatedAt,
+				"properties": result.Entity.Properties,
+			}
+
 			switch strings.ToLower(output) {
-			case "json":
-				return formatOutput(result.Entity, "json")
-			default:
+			case "json", "yaml":
+				return formatOutput(entityData, strings.ToLower(output))
+			default: // table
 				e := result.Entity
 
 				// Collect property keys for display in deterministic order.
@@ -334,12 +358,12 @@ func registerAgentGet() *cobra.Command {
 				}
 				sort.Strings(propKeys)
 
-				fmt.Printf("Identifier:  %s\n", e.Identifier)
-				fmt.Printf("Title:       %s\n", e.Title)
-				fmt.Printf("Blueprint:   %s\n", e.Blueprint)
-				fmt.Printf("Created:     %s\n", e.CreatedAt)
-				fmt.Printf("Updated:     %s\n", e.UpdatedAt)
-				fmt.Printf("Properties:  %s\n", strings.Join(propKeys, ", "))
+				fmt.Printf("Identifier:    %s\n", e.Identifier)
+				fmt.Printf("Title:         %s\n", e.Title)
+				fmt.Printf("Blueprint:     %s\n", e.Blueprint)
+				fmt.Printf("Created:       %s\n", e.CreatedAt)
+				fmt.Printf("Updated:       %s\n", e.UpdatedAt)
+				fmt.Printf("Properties:    %s\n", strings.Join(propKeys, ", "))
 
 				// Preview the prompt from the first matching candidate.
 				for _, candidate := range []string{"prompt", "system_prompt", "systemPrompt", "instructions"} {
@@ -364,7 +388,7 @@ func registerAgentGet() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&org, "org", "", "Organization name (uses default if not specified)")
-	cmd.Flags().StringVarP(&output, "output", "o", "text", "Output format: text, json")
+	cmd.Flags().StringVarP(&output, "output", "o", "table", "Output format: table, json, yaml")
 
 	return cmd
 }
@@ -428,10 +452,19 @@ func registerAgentUpdate() *cobra.Command {
 				return fmt.Errorf("failed to update agent: %w", err)
 			}
 
+			entityData := map[string]interface{}{
+				"identifier": result.Entity.Identifier,
+				"title":      result.Entity.Title,
+				"blueprint":  result.Entity.Blueprint,
+				"createdAt":  result.Entity.CreatedAt,
+				"updatedAt":  result.Entity.UpdatedAt,
+				"properties": result.Entity.Properties,
+			}
+
 			switch strings.ToLower(output) {
-			case "json":
-				return formatOutput(result.Entity, "json")
-			default:
+			case "json", "yaml":
+				return formatOutput(entityData, strings.ToLower(output))
+			default: // table
 				fmt.Printf("%s Agent %s updated successfully\n", styles.CheckMark, agentID)
 			}
 			return nil
@@ -439,7 +472,7 @@ func registerAgentUpdate() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&org, "org", "", "Organization name (uses default if not specified)")
-	cmd.Flags().StringVarP(&output, "output", "o", "text", "Output format: text, json")
+	cmd.Flags().StringVarP(&output, "output", "o", "table", "Output format: table, json, yaml")
 	cmd.Flags().StringVar(&promptFile, "prompt-file", "", "Path to file containing the new system prompt")
 	cmd.MarkFlagRequired("prompt-file")
 
