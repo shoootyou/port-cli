@@ -21,6 +21,7 @@
 package commands
 
 import (
+	"os"
 	"strings"
 	"testing"
 
@@ -251,6 +252,36 @@ func TestAgentCreate_ModeFlag_AcceptsValidValues(t *testing.T) {
 				t.Errorf("after Set(mode, %q), got %q", mode, got)
 			}
 		})
+	}
+}
+
+// TestAgentCreate_UnknownModeReturnsError verifies that an unrecognised --mode value
+// is rejected by the allowlist guard in RunE before any API call is made.
+// The exact error is: `invalid mode "...": must be one of auto, create, upsert, patch`
+func TestAgentCreate_UnknownModeReturnsError(t *testing.T) {
+	// Create a temp .md file with minimal valid frontmatter so the --file flag
+	// is satisfied and the guard can reach the mode allowlist check.
+	tmp, err := os.CreateTemp(t.TempDir(), "agent-*.md")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	content := "---\nidentifier: test_agent\n---\n\nThis is the agent body.\n"
+	if _, err := tmp.WriteString(content); err != nil {
+		t.Fatalf("failed to write temp file: %v", err)
+	}
+	tmp.Close()
+
+	rootCmd := buildAgentsRoot(t)
+	rootCmd.SetOut(nil)
+	rootCmd.SetErr(nil)
+	rootCmd.SetArgs([]string{"agents", "create", "--file", tmp.Name(), "--mode", "invalid_mode"})
+
+	err = rootCmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for unknown --mode value, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid") {
+		t.Errorf("expected error to contain \"invalid\", got: %q", err.Error())
 	}
 }
 
