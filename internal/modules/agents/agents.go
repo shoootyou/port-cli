@@ -3,6 +3,7 @@ package agents
 import (
 	"errors"
 	"fmt"
+	"io"
 
 	"github.com/port-experimental/port-cli/internal/api"
 )
@@ -82,10 +83,11 @@ const (
 
 // CreateOptions are the inputs to the Create module function.
 type CreateOptions struct {
-	File   string     // path to the .md agent file (required)
-	Mode   CreateMode // "auto" | "create" | "upsert" | "patch" (default: "auto")
-	Yes    bool       // skip interactive confirmation
-	Output string     // "table" | "json" | "yaml" (default: "table")
+	File        string     // path to the .md agent file (required)
+	Mode        CreateMode // "auto" | "create" | "upsert" | "patch" (default: "auto")
+	Yes         bool       // skip interactive confirmation
+	Output      string     // "table" | "json" | "yaml" (default: "table")
+	StdinReader io.Reader  // injectable for testing; nil means use os.Stdin
 }
 
 // CreateResult is what Create returns on success.

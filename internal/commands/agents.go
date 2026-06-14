@@ -545,6 +545,11 @@ Examples:
   port agents create --file triage_agent.md --mode patch --output json`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			allowedModes := map[string]bool{"auto": true, "create": true, "upsert": true, "patch": true}
+			if !allowedModes[mode] {
+				return fmt.Errorf("invalid mode %q: must be one of auto, create, upsert, patch", mode)
+			}
+
 			flags := GetGlobalFlags(cmd.Context())
 			configManager := config.NewConfigManager(flags.ConfigFile)
 
@@ -582,7 +587,7 @@ Examples:
 			})
 			if err != nil {
 				if errors.Is(err, agents.ErrConfirmationDeclined) {
-					lipgloss.Fprintf(os.Stderr, "%s Aborted.\n", styles.ExclamationMark)
+					lipgloss.Fprintf(os.Stderr, "%s Cancelled — no changes made.\n", styles.ExclamationMark)
 					return nil
 				}
 				return fmt.Errorf("failed to create agent: %w", err)

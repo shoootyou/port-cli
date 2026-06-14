@@ -3,12 +3,14 @@
  * @interface RegisterAgents(rootCmd *cobra.Command)
  * @behavior
  *   - Registers an "agents" subcommand on rootCmd
- *   - "agents" exposes subcommands: invoke, list, get, update
+ *   - "agents" exposes subcommands: invoke, list, get, update, create
  *   - "list" accepts flags: --org (string), --output/-o (string)
  *   - "get" accepts flags: --org (string), --output/-o (string); requires exactly 1 positional arg
  *   - "update" accepts flags: --org (string), --output/-o (string), --prompt-file (string, required)
+ *   - "create" accepts flags: --org (string), --file/-f (string, required), --mode (string), --yes/-y (bool), --output/-o (string)
  * @edge-cases
  *   - "update" invoked without --prompt-file must return a cobra flag-required error
+ *   - "create" with an unrecognised --mode value must return a validation error
  * @see ./agents.go
  */
 
@@ -49,13 +51,13 @@ func findSubcmd(t *testing.T, parentCmd *cobra.Command, name string) *cobra.Comm
 	return sub
 }
 
-// TestRegisterAgents_SubcommandPresence verifies that RegisterAgents adds all four
-// expected subcommands: invoke, list, get, update.
+// TestRegisterAgents_SubcommandPresence verifies that RegisterAgents adds all five
+// expected subcommands: invoke, list, get, update, create.
 func TestRegisterAgents_SubcommandPresence(t *testing.T) {
 	rootCmd := buildAgentsRoot(t)
 	agentsCmd := findAgentsCmd(t, rootCmd)
 
-	expectedSubs := []string{"invoke", "list", "get", "update"}
+	expectedSubs := []string{"invoke", "list", "get", "update", "create"}
 	for _, sub := range expectedSubs {
 		found := false
 		for _, cmd := range agentsCmd.Commands() {

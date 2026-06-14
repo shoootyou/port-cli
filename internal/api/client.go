@@ -155,31 +155,15 @@ func (c *Client) request(ctx context.Context, method, path string, data any, par
 
 	url := fmt.Sprintf("%s%s", c.apiURL, path)
 
-	var reqBody io.Reader
+	// Marshal the body once; jsonData is reused to create a fresh reader on
+	// each attempt. An exhausted io.Reader cannot be replayed across retries.
+	var jsonData []byte
 	if data != nil {
-		jsonData, err := json.Marshal(data)
-		if err != nil {
-			return nil, fmt.Errorf("failed to marshal request body: %w", err)
+		var marshalErr error
+		jsonData, marshalErr = json.Marshal(data)
+		if marshalErr != nil {
+			return nil, fmt.Errorf("failed to marshal request body: %w", marshalErr)
 		}
-		reqBody = bytes.NewBuffer(jsonData)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, method, url, reqBody)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", useragent.String())
-
-	// Add query parameters
-	if params != nil {
-		q := req.URL.Query()
-		for k, v := range params {
-			q.Set(k, v)
-		}
-		req.URL.RawQuery = q.Encode()
 	}
 
 	var resp *http.Response
@@ -200,6 +184,31 @@ func (c *Client) request(ctx context.Context, method, path string, data any, par
 			case <-time.After(delay):
 				// Continue with retry
 			}
+		}
+
+		// Build a fresh request per attempt — the body reader is consumed after
+		// the first Do() call and cannot be replayed for 429 retries.
+		var reqBody io.Reader
+		if jsonData != nil {
+			reqBody = bytes.NewBuffer(jsonData)
+		}
+
+		req, err := http.NewRequestWithContext(ctx, method, url, reqBody)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create request: %w", err)
+		}
+
+		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("User-Agent", useragent.String())
+
+		// Add query parameters
+		if params != nil {
+			q := req.URL.Query()
+			for k, v := range params {
+				q.Set(k, v)
+			}
+			req.URL.RawQuery = q.Encode()
 		}
 
 		resp, err = c.httpClient.Do(req)

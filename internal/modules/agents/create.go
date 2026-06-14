@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
+	"strings"
 
 	"charm.land/huh/v2"
 	"github.com/charmbracelet/x/term"
@@ -68,7 +70,7 @@ func Create(ctx context.Context, apiClient *api.Client, opts CreateOptions) (*Cr
 
 	// Run confirmation prompt if not skipped.
 	if !opts.Yes {
-		if err := runConfirmation(spec, effectiveMode); err != nil {
+		if err := runConfirmation(spec, effectiveMode, opts.StdinReader); err != nil {
 			return nil, err
 		}
 	}
@@ -165,19 +167,19 @@ func buildPatchBody(spec *AgentFileSpec, tools []string, promptKey string) map[s
 		patchProps["tools"] = tools
 	}
 
-	body := map[string]interface{}{
+	// PATCH sends only "properties" — never identity fields (title, identifier).
+	// Identity fields are immutable or unneeded on partial updates.
+	return map[string]interface{}{
 		"properties": patchProps,
 	}
-	if spec.Title != "" {
-		body["title"] = spec.Title
-	}
-
-	return body
 }
 
 // runConfirmation shows the confirmation summary and prompts the user.
-// Returns ErrConfirmationDeclined if the user declines or it's a non-TTY.
-func runConfirmation(spec *AgentFileSpec, mode CreateMode) error {
+// stdinReader is the reader to use for input; if nil, os.Stdin is used.
+// Returns ErrConfirmationDeclined if the user declines.
+// Returns a non-nil error (not ErrConfirmationDeclined) if stdin is not a TTY
+// and no reader is injected — callers should treat that as a hard failure (exit 1).
+func runConfirmation(spec *AgentFileSpec, mode CreateMode, stdinReader io.Reader) error {
 	// Print summary to stderr.
 	promptPreview := spec.Prompt
 	if promptPreview == "" {
@@ -194,9 +196,23 @@ func runConfirmation(spec *AgentFileSpec, mode CreateMode) error {
 	fmt.Fprintf(os.Stderr, "Prompt preview: %s\n", promptPreview)
 	fmt.Fprintf(os.Stderr, "──────────────────────────────────────────\n\n")
 
-	// In non-TTY environments, treat as declined.
+	// When a reader is injected (test seam): read one byte to detect EOF.
+	// EOF → decline (simulates the user pressing Ctrl-D or supplying no input).
+	// Any available byte → treat as a "yes" (only used in tests that need to
+	// explicitly confirm; real interactive confirmation goes through huh below).
+	if stdinReader != nil {
+		buf := make([]byte, 1)
+		n, readErr := stdinReader.Read(buf)
+		if n == 0 || readErr == io.EOF {
+			return ErrConfirmationDeclined
+		}
+		// Non-empty reader: treat first byte as confirmation signal.
+		return nil
+	}
+
+	// Real interactive path: require a TTY; run huh confirmation form.
 	if !term.IsTerminal(os.Stdin.Fd()) {
-		return ErrConfirmationDeclined
+		return fmt.Errorf("stdin is not a terminal; use --yes to confirm non-interactively")
 	}
 
 	var confirmed bool
@@ -220,21 +236,11 @@ func runConfirmation(spec *AgentFileSpec, mode CreateMode) error {
 }
 
 // is404Error checks whether an error from the API client represents a 404 Not Found.
+// It matches the exact phrase "404 Not Found" that the client appends to error messages,
+// avoiding false positives from URLs or body content that contain "404" as a substring.
 func is404Error(err error) bool {
 	if err == nil {
 		return false
 	}
-	msg := err.Error()
-	// The client formats errors as: "API request to <url> <method> failed: 404 Not Found..."
-	return containsStatusCode(msg, "404")
-}
-
-// containsStatusCode checks if the error message contains the given HTTP status code.
-func containsStatusCode(msg, code string) bool {
-	for i := 0; i <= len(msg)-len(code); i++ {
-		if msg[i:i+len(code)] == code {
-			return true
-		}
-	}
-	return false
+	return strings.Contains(err.Error(), "404 Not Found")
 }

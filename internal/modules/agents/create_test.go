@@ -477,11 +477,18 @@ func TestCreate_Mode_Upsert_Success(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // C12: mode "patch", PATCH succeeds → Action=="patched", ModeUsed=="patch"
+//
+//	Asserts that the PATCH body contains "properties" and the prompt value,
+//	and does NOT contain top-level "title" or "identifier" (patch sends only
+//	non-empty fields inside properties, not identity fields).
+//
 // ---------------------------------------------------------------------------
-
 func TestCreate_Mode_Patch_Success(t *testing.T) {
 	const agentID = "patch_agent"
-	filePath := writeAgentMD(t, agentID, "Patch Agent", "You are a patch agent.")
+	const promptVal = "You are a patch agent."
+	filePath := writeAgentMD(t, agentID, "Patch Agent", promptVal)
+
+	var capturedPatchBody []byte
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if authHandler(w, r) {
@@ -496,10 +503,10 @@ func TestCreate_Mode_Patch_Success(t *testing.T) {
 				"entity": rawEntityMap(agentID, "prompt", "old prompt"),
 			})
 		case r.URL.Path == entityPath && r.Method == http.MethodPatch:
-			io.Copy(io.Discard, r.Body)
+			capturedPatchBody, _ = io.ReadAll(r.Body)
 			json.NewEncoder(w).Encode(map[string]interface{}{
 				"ok":     true,
-				"entity": rawEntityMap(agentID, "prompt", "You are a patch agent."),
+				"entity": rawEntityMap(agentID, "prompt", promptVal),
 			})
 		default:
 			http.NotFound(w, r)
@@ -524,6 +531,29 @@ func TestCreate_Mode_Patch_Success(t *testing.T) {
 	}
 	if result.ModeUsed != CreateModePatch {
 		t.Errorf("want ModeUsed==%q, got %q", CreateModePatch, result.ModeUsed)
+	}
+
+	// Assert patch body content.
+	if capturedPatchBody == nil {
+		t.Fatal("PATCH body was never captured — PATCH was not called")
+	}
+	bodyStr := string(capturedPatchBody)
+	if !strings.Contains(bodyStr, `"properties"`) {
+		t.Errorf("PATCH body must contain %q key; got: %s", "properties", bodyStr)
+	}
+	if !strings.Contains(bodyStr, promptVal) {
+		t.Errorf("PATCH body must contain prompt value %q; got: %s", promptVal, bodyStr)
+	}
+	// Patch body must NOT contain top-level identity fields.
+	var parsed map[string]interface{}
+	if jsonErr := json.Unmarshal(capturedPatchBody, &parsed); jsonErr != nil {
+		t.Fatalf("PATCH body is not valid JSON: %v", jsonErr)
+	}
+	if _, hasTitle := parsed["title"]; hasTitle {
+		t.Errorf("PATCH body must NOT contain top-level %q when title is empty in spec; body: %s", "title", bodyStr)
+	}
+	if _, hasID := parsed["identifier"]; hasID {
+		t.Errorf("PATCH body must NOT contain top-level %q; body: %s", "identifier", bodyStr)
 	}
 }
 
@@ -784,8 +814,9 @@ func TestCreate_ConfirmationDeclined_ReturnsErrConfirmationDeclined(t *testing.T
 	filePath := writeAgentMD(t, "confirm_agent", "Confirm Agent", "Some prompt.")
 
 	// No HTTP server — the confirmation fires before any API call.
-	// In a non-interactive test environment huh.Confirm reads from /dev/null;
-	// EOF is treated as a decline → ErrConfirmationDeclined.
+	// StdinReader is set to an EOF reader; huh treats EOF as a decline →
+	// ErrConfirmationDeclined. This avoids any dependency on term.IsTerminal
+	// and prevents the test from hanging in non-interactive environments.
 	client := api.NewClient(api.ClientOpts{
 		ClientID:     "test-id",
 		ClientSecret: "test-secret",
@@ -793,9 +824,10 @@ func TestCreate_ConfirmationDeclined_ReturnsErrConfirmationDeclined(t *testing.T
 	})
 
 	result, err := Create(context.Background(), client, CreateOptions{
-		File: filePath,
-		Mode: CreateModeCreate,
-		Yes:  false, // trigger interactive confirmation
+		File:        filePath,
+		Mode:        CreateModeCreate,
+		Yes:         false,                 // trigger interactive confirmation
+		StdinReader: strings.NewReader(""), // EOF → huh declines
 	})
 	if err == nil {
 		t.Fatal("want ErrConfirmationDeclined, got nil")
