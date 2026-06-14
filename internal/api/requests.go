@@ -296,6 +296,26 @@ func (c *Client) UpdateEntity(ctx context.Context, blueprintIdentifier, entityId
 	return result.Entity, nil
 }
 
+// PatchEntity applies a partial update to an entity (PATCH).
+// The entity parameter is the partial payload to merge (e.g., {"properties": {...}}).
+// Returns the updated entity from the response.
+func (c *Client) PatchEntity(ctx context.Context, blueprintIdentifier, entityIdentifier string, entity Entity) (Entity, error) {
+	resp, err := c.request(ctx, "PATCH", fmt.Sprintf("/blueprints/%s/entities/%s", blueprintIdentifier, entityIdentifier), entity, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Entity Entity `json:"entity"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode entity: %w", err)
+	}
+
+	return result.Entity, nil
+}
+
 // DeleteEntity deletes an entity.
 func (c *Client) DeleteEntity(ctx context.Context, blueprintIdentifier, entityIdentifier string) error {
 	resp, err := c.request(ctx, "DELETE", fmt.Sprintf("/blueprints/%s/entities/%s", blueprintIdentifier, entityIdentifier), nil, nil)
