@@ -1172,6 +1172,81 @@ func TestCreateResult_HasNoModeUsedField(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// TestCreate_Patch_NilTools_OmittedFromBody: --patch with nil Tools must omit
+// the "tools" key from the PATCH body (sparse-patch semantics).
+// ---------------------------------------------------------------------------
+
+func TestCreate_Patch_NilTools_OmittedFromBody(t *testing.T) {
+	// File has NO tools key in frontmatter → spec.Tools == nil after parse.
+	// The body/Prompt is set so that the patch body includes at least the prompt property.
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "niltools_patch.md")
+	content := "---\nidentifier: niltools_patch_agent\ntitle: Nil Tools Patch\n---\nYou are a nil-tools agent.\n"
+	if err := os.WriteFile(filePath, []byte(content), 0o644); err != nil {
+		t.Fatalf("failed to write file: %v", err)
+	}
+
+	var capturedPatchBody []byte
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if authHandler(w, r) {
+			return
+		}
+		entityPath := "/blueprints/_ai_agent/entities/niltools_patch_agent"
+		switch {
+		case r.URL.Path == entityPath && r.Method == http.MethodGet:
+			// Entity exists; agent has "prompt" property.
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"ok":     true,
+				"entity": rawEntityMap("niltools_patch_agent", "prompt", "old prompt"),
+			})
+		case r.URL.Path == entityPath && r.Method == http.MethodPatch:
+			capturedPatchBody, _ = io.ReadAll(r.Body)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"ok":     true,
+				"entity": rawEntityMap("niltools_patch_agent", "prompt", "You are a nil-tools agent."),
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := newTestClient(server.URL)
+	_, err := Create(context.Background(), client, CreateOptions{
+		File:  filePath,
+		Patch: true,
+		Yes:   true,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if capturedPatchBody == nil {
+		t.Fatal("PATCH body was never captured — PATCH was not called")
+	}
+
+	var parsed map[string]interface{}
+	if jsonErr := json.Unmarshal(capturedPatchBody, &parsed); jsonErr != nil {
+		t.Fatalf("PATCH body is not valid JSON: %v — body: %s", jsonErr, capturedPatchBody)
+	}
+
+	props, ok := parsed["properties"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("want properties to be a map, got %T", parsed["properties"])
+	}
+
+	// "tools" must NOT appear in the PATCH body when spec.Tools is nil.
+	if _, hasTools := props["tools"]; hasTools {
+		t.Errorf("PATCH body must NOT contain %q when spec.Tools is nil; body: %s", "tools", capturedPatchBody)
+	}
+
+	// The prompt property MUST be present.
+	if _, hasPrompt := props["prompt"]; !hasPrompt {
+		t.Errorf("PATCH body must contain the prompt property; body: %s", capturedPatchBody)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // A1: CreateEntityWithParams upsert=false → query has upsert=false, no merge param
 // ---------------------------------------------------------------------------
 

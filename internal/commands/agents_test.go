@@ -7,10 +7,10 @@
  *   - "list" accepts flags: --org (string), --output/-o (string)
  *   - "get" accepts flags: --org (string), --output/-o (string); requires exactly 1 positional arg
  *   - "update" accepts flags: --org (string), --output/-o (string), --prompt-file (string, required)
- *   - "create" accepts flags: --org (string), --file/-f (string, required), --mode (string), --yes/-y (bool), --output/-o (string)
+ *   - "create" accepts flags: --org (string), --file/-f (string, required), --force (bool), --patch (bool), --yes/-y (bool), --output/-o (string)
  * @edge-cases
  *   - "update" invoked without --prompt-file must return a cobra flag-required error
- *   - "create" with an unrecognised --mode value must return a validation error
+ *   - "--force and --patch are mutually exclusive — both set must return error"
  * @see ./agents.go
  */
 

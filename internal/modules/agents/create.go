@@ -208,6 +208,8 @@ func buildPatchBody(spec *AgentFileSpec, tools []string, promptKey string) map[s
 	if spec.Status != "" {
 		patchProps["status"] = spec.Status
 	}
+	// tools is omitted when nil or empty: sparse-patch semantics prevent accidental
+	// clearing of existing tool lists. To explicitly clear tools, use --force instead.
 	if len(tools) > 0 {
 		patchProps["tools"] = tools
 	}
