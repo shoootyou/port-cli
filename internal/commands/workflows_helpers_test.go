@@ -397,65 +397,6 @@ func TestParseWorkflowFileIdentifierNotString(t *testing.T) {
 // confirmAction tests
 // ====================================================================
 
-func TestConfirmActionForceTrue(t *testing.T) {
-	// force=true should return true without reading stdin
-	confirmed, err := confirmAction("Delete workflow?", true, nil)
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
-	if !confirmed {
-		t.Fatal("expected confirmed=true when force=true")
-	}
-}
-
-func TestConfirmActionStdinYes(t *testing.T) {
-	tests := []struct {
-		name  string
-		input string
-		want  bool
-	}{
-		{"lowercase y", "y\n", true},
-		{"uppercase Y", "Y\n", true},
-		{"lowercase yes", "yes\n", true},
-		{"uppercase YES", "YES\n", true},
-		{"mixed case Yes", "Yes\n", true},
-		{"lowercase n", "n\n", false},
-		{"uppercase N", "N\n", false},
-		{"no input", "no\n", false},
-		{"garbage", "garbage\n", false},
-		{"empty EOF", "", false},
-		{"whitespace only", "  \n", false},
-		{"y with leading whitespace", "  y\n", true},
-		{"yes with trailing whitespace", "yes  \n", true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			stdin := strings.NewReader(tt.input)
-			confirmed, err := confirmAction("Proceed?", false, stdin)
-			if err != nil {
-				t.Fatalf("expected no error, got %v", err)
-			}
-			if confirmed != tt.want {
-				t.Errorf("expected confirmed=%v for input %q, got %v", tt.want, tt.input, confirmed)
-			}
-		})
-	}
-}
-
-func TestConfirmActionStdinLongInput(t *testing.T) {
-	// Ensure we handle long input gracefully
-	longInput := strings.Repeat("x", 1000) + "\n"
-	stdin := strings.NewReader(longInput)
-	confirmed, err := confirmAction("Proceed?", false, stdin)
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
-	if confirmed {
-		t.Fatal("expected confirmed=false for garbage input")
-	}
-}
-
 func TestConfirmActionStdinMultipleReads(t *testing.T) {
 	// Ensure confirmAction only reads once and doesn't block on subsequent reads
 	stdin := strings.NewReader("y\n")

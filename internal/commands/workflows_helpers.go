@@ -1,11 +1,9 @@
 package commands
 
 import (
-	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,14 +11,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Sentinel errors
-var (
-	ErrInvalidIdentifier = errors.New("invalid identifier")
-	ErrFileTooLarge      = errors.New("file exceeds 1MB limit")
-	ErrSymlink           = errors.New("symlinks are not supported")
-	ErrUnsupportedFormat = errors.New("unsupported file format")
-	ErrMissingIdentifier = errors.New("missing required field: identifier")
-)
+// ErrMissingIdentifier is returned when a workflow file is missing the required "identifier" field.
+var ErrMissingIdentifier = errors.New("missing required field: identifier")
 
 // validateWorkflowIdentifier validates that the identifier does not contain '/' and is not empty.
 func validateWorkflowIdentifier(identifier string) error {
@@ -95,31 +87,4 @@ func parseWorkflowFile(path string) (map[string]interface{}, string, error) {
 	}
 
 	return body, identifier, nil
-}
-
-// confirmAction prompts the user for confirmation. If force is true, returns true immediately
-// without reading stdin. Otherwise, reads one line from stdin and returns true only if the
-// input is "y" or "yes" (case-insensitive, trimmed).
-func confirmAction(prompt string, force bool, stdin io.Reader) (bool, error) {
-	if force {
-		return true, nil
-	}
-
-	// Print prompt to stderr (so it doesn't interfere with stdout)
-	fmt.Fprintln(os.Stderr, prompt)
-
-	// Read one line from stdin
-	scanner := bufio.NewScanner(stdin)
-	if !scanner.Scan() {
-		// EOF or error
-		if err := scanner.Err(); err != nil {
-			return false, err
-		}
-		// EOF without error
-		return false, nil
-	}
-
-	line := strings.TrimSpace(scanner.Text())
-	lineLower := strings.ToLower(line)
-	return lineLower == "y" || lineLower == "yes", nil
 }

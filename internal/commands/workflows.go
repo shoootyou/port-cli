@@ -13,11 +13,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// testClient is the package-level seam for dependency injection in tests.
-// In production (nil), commands use normal auth flow.
-// In tests, set to httptest-backed client, then defer reset to nil.
-var testClient *api.Client
-
 // getClientForWorkflows returns the test client if set, otherwise creates a production client.
 func getClientForWorkflows(cmd *cobra.Command, org string) (*api.Client, func(), error) {
 	if testClient != nil {
