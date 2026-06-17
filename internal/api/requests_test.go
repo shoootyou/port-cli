@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -224,7 +225,7 @@ func TestGetSkills_FallsBackToLegacyEntitiesWhenRelationMissing(t *testing.T) {
 	if len(entities) != 1 || entities[0]["identifier"] != "legacy-skill" {
 		t.Fatalf("unexpected entities: %+v", entities)
 	}
-	expected := []string{"/blueprints/skill/entities/search", "/blueprints/skill/entities"}
+	expected := []string{"/blueprints/skill/entities/search", "/v1/blueprints/skill/entities"}
 	if len(paths) != len(expected) {
 		t.Fatalf("expected paths %v, got %v", expected, paths)
 	}
@@ -467,16 +468,281 @@ func TestCallGenericPOSTAPI(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(ClientOpts{ClientID: "id", ClientSecret: "secret", APIURL: server.URL, Timeout: 0})
-	res, err := client.Request(context.Background(), RequestParams{
-		Method:   "POST",
-		Data:     map[string]any{"properties": map[string]any{}},
-		Endpoint: "/actions/my-action/runs",
-	},
+	res, err := client.Request(
+		context.Background(), RequestParams{
+			Method:   "POST",
+			Data:     map[string]any{"properties": map[string]any{}},
+			Endpoint: "/actions/my-action/runs",
+		},
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if res, ok := res.(map[string]any); ok && res["ok"] != true {
 		t.Error("expected entities permissions")
+	}
+}
+
+/**
+ * @spec-handoff
+ * @interface CreateEntityWithParams(ctx context.Context, blueprintIdentifier string, entity Entity, upsert, merge bool) (Entity, error)
+ * @interface PatchEntity(ctx context.Context, blueprintIdentifier, entityIdentifier string, patch Entity) (Entity, error)
+ * @behavior CreateEntityWithParams
+ *   - POSTs to /v1/blueprints/{blueprintIdentifier}/entities
+ *   - When upsert=false: adds query param ?upsert=false, NO merge param
+ *   - When upsert=true, merge=false: adds query params ?upsert=true&merge=false
+ *   - When upsert=true, merge=true: adds query params ?upsert=true&merge=true
+ *   - Sends entity as JSON request body
+ *   - Unwraps response {"entity": {...}} and returns the entity
+ *   - Returns error on HTTP 409 (conflict), 401, or other non-2xx
+ * @behavior PatchEntity
+ *   - PATCHes to /v1/blueprints/{blueprintIdentifier}/entities/{entityIdentifier}
+ *   - Sends patch as JSON request body
+ *   - Unwraps response {"entity": {...}} and returns the entity
+ *   - Returns error on HTTP 404 or other non-2xx
+ * @edge-cases
+ *   - 401 response: error must NOT embed response body (security)
+ *   - 409 conflict: returns non-nil error
+ *   - 404 not found: returns non-nil error
+ * @see CreateEntity (lines 264-279) for existing pattern
+ * @see PatchBlueprint (lines 136-152) for PATCH pattern
+ */
+
+func TestCreateEntityWithParams_UpsertFalse(t *testing.T) {
+	var receivedMethod string
+	var receivedPath string
+	var receivedQuery string
+	var receivedBody Entity
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/auth/access_token" {
+			json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "accessToken": "tok", "expiresIn": 3600})
+			return
+		}
+		receivedMethod = r.Method
+		receivedPath = r.URL.Path
+		receivedQuery = r.URL.RawQuery
+		if err := json.NewDecoder(r.Body).Decode(&receivedBody); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"ok": true,
+			"entity": map[string]interface{}{
+				"identifier": "test-entity-1",
+				"title":      "Test Entity",
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := NewClient(ClientOpts{ClientID: "id", ClientSecret: "secret", APIURL: server.URL, Timeout: 0})
+	entity, err := client.CreateEntityWithParams(context.Background(), "my-blueprint", Entity{
+		"identifier": "test-entity-1",
+		"title":      "Test Entity",
+	}, false, false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if receivedMethod != "POST" {
+		t.Errorf("expected POST, got %s", receivedMethod)
+	}
+	if receivedPath != "/v1/blueprints/my-blueprint/entities" {
+		t.Errorf("expected /v1/blueprints/my-blueprint/entities, got %s", receivedPath)
+	}
+	if receivedQuery != "upsert=false" {
+		t.Errorf("expected query 'upsert=false' (no merge), got '%s'", receivedQuery)
+	}
+	if receivedBody["identifier"] != "test-entity-1" {
+		t.Errorf("unexpected request body: %+v", receivedBody)
+	}
+	if entity["identifier"] != "test-entity-1" {
+		t.Errorf("expected entity identifier test-entity-1, got %+v", entity)
+	}
+}
+
+func TestCreateEntityWithParams_UpsertTrueMergeFalse(t *testing.T) {
+	var receivedQuery string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/auth/access_token" {
+			json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "accessToken": "tok", "expiresIn": 3600})
+			return
+		}
+		receivedQuery = r.URL.RawQuery
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"ok": true,
+			"entity": map[string]interface{}{
+				"identifier": "upserted-entity",
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := NewClient(ClientOpts{ClientID: "id", ClientSecret: "secret", APIURL: server.URL, Timeout: 0})
+	entity, err := client.CreateEntityWithParams(context.Background(), "my-blueprint", Entity{
+		"identifier": "upserted-entity",
+	}, true, false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Query must include both upsert=true and merge=false
+	if receivedQuery != "upsert=true&merge=false" && receivedQuery != "merge=false&upsert=true" {
+		t.Errorf("expected query 'upsert=true&merge=false', got '%s'", receivedQuery)
+	}
+	if entity["identifier"] != "upserted-entity" {
+		t.Errorf("unexpected entity: %+v", entity)
+	}
+}
+
+func TestCreateEntityWithParams_UpsertTrueMergeTrue(t *testing.T) {
+	var receivedQuery string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/auth/access_token" {
+			json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "accessToken": "tok", "expiresIn": 3600})
+			return
+		}
+		receivedQuery = r.URL.RawQuery
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"ok": true,
+			"entity": map[string]interface{}{
+				"identifier": "merged-entity",
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := NewClient(ClientOpts{ClientID: "id", ClientSecret: "secret", APIURL: server.URL, Timeout: 0})
+	entity, err := client.CreateEntityWithParams(context.Background(), "my-blueprint", Entity{
+		"identifier": "merged-entity",
+	}, true, true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Query must include both upsert=true and merge=true
+	if receivedQuery != "upsert=true&merge=true" && receivedQuery != "merge=true&upsert=true" {
+		t.Errorf("expected query 'upsert=true&merge=true', got '%s'", receivedQuery)
+	}
+	if entity["identifier"] != "merged-entity" {
+		t.Errorf("unexpected entity: %+v", entity)
+	}
+}
+
+func TestCreateEntityWithParams_Conflict(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/auth/access_token" {
+			json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "accessToken": "tok", "expiresIn": 3600})
+			return
+		}
+		w.WriteHeader(http.StatusConflict)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"ok":      false,
+			"message": "entity already exists",
+		})
+	}))
+	defer server.Close()
+
+	client := NewClient(ClientOpts{ClientID: "id", ClientSecret: "secret", APIURL: server.URL, Timeout: 0})
+	_, err := client.CreateEntityWithParams(context.Background(), "my-blueprint", Entity{
+		"identifier": "conflict-entity",
+	}, false, false)
+	if err == nil {
+		t.Error("expected error on 409 conflict, got nil")
+	}
+}
+
+func TestCreateEntityWithParams_Unauthorized(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/auth/access_token" {
+			json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "accessToken": "tok", "expiresIn": 3600})
+			return
+		}
+		w.WriteHeader(http.StatusUnauthorized)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"ok":      false,
+			"message": "unauthorized secret body content",
+		})
+	}))
+	defer server.Close()
+
+	client := NewClient(ClientOpts{ClientID: "id", ClientSecret: "secret", APIURL: server.URL, Timeout: 0})
+	_, err := client.CreateEntityWithParams(context.Background(), "my-blueprint", Entity{
+		"identifier": "unauth-entity",
+	}, false, false)
+	if err == nil {
+		t.Error("expected error on 401 unauthorized, got nil")
+	}
+	// Per convention, 401 errors must NOT embed response body (security)
+	// If the error message contains "secret body content", that's a leak
+	if err != nil && strings.Contains(err.Error(), "secret body content") {
+		t.Errorf("401 error must not leak response body, got: %v", err)
+	}
+}
+
+func TestPatchEntity_HappyPath(t *testing.T) {
+	var receivedMethod string
+	var receivedPath string
+	var receivedBody Entity
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/auth/access_token" {
+			json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "accessToken": "tok", "expiresIn": 3600})
+			return
+		}
+		receivedMethod = r.Method
+		receivedPath = r.URL.Path
+		if err := json.NewDecoder(r.Body).Decode(&receivedBody); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"ok": true,
+			"entity": map[string]interface{}{
+				"identifier": "patched-entity",
+				"title":      "Updated Title",
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := NewClient(ClientOpts{ClientID: "id", ClientSecret: "secret", APIURL: server.URL, Timeout: 0})
+	entity, err := client.PatchEntity(context.Background(), "my-blueprint", "patched-entity", Entity{
+		"title": "Updated Title",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if receivedMethod != "PATCH" {
+		t.Errorf("expected PATCH, got %s", receivedMethod)
+	}
+	if receivedPath != "/v1/blueprints/my-blueprint/entities/patched-entity" {
+		t.Errorf("expected /v1/blueprints/my-blueprint/entities/patched-entity, got %s", receivedPath)
+	}
+	if receivedBody["title"] != "Updated Title" {
+		t.Errorf("unexpected patch body: %+v", receivedBody)
+	}
+	if entity["identifier"] != "patched-entity" {
+		t.Errorf("expected entity identifier patched-entity, got %+v", entity)
+	}
+	if entity["title"] != "Updated Title" {
+		t.Errorf("expected entity title 'Updated Title', got %+v", entity)
+	}
+}
+
+func TestPatchEntity_NotFound(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/auth/access_token" {
+			json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "accessToken": "tok", "expiresIn": 3600})
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"ok":      false,
+			"message": "entity not found",
+		})
+	}))
+	defer server.Close()
+
+	client := NewClient(ClientOpts{ClientID: "id", ClientSecret: "secret", APIURL: server.URL, Timeout: 0})
+	_, err := client.PatchEntity(context.Background(), "my-blueprint", "missing-entity", Entity{
+		"title": "Will Fail",
+	})
+	if err == nil {
+		t.Error("expected error on 404 not found, got nil")
 	}
 }
