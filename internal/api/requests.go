@@ -163,7 +163,7 @@ func (c *Client) DeleteBlueprint(ctx context.Context, identifier string) error {
 
 // GetEntities retrieves entities for a blueprint.
 func (c *Client) GetEntities(ctx context.Context, blueprintIdentifier string, params map[string]string) ([]Entity, error) {
-	resp, err := c.request(ctx, "GET", fmt.Sprintf("/v1/blueprints/%s/entities", blueprintIdentifier), nil, params)
+	resp, err := c.request(ctx, "GET", fmt.Sprintf("/blueprints/%s/entities", blueprintIdentifier), nil, params)
 	if err != nil {
 		return nil, err
 	}
@@ -244,7 +244,7 @@ func (c *Client) TopSearchEntities(ctx context.Context, blueprintIdentifier stri
 
 // GetEntity retrieves a specific entity.
 func (c *Client) GetEntity(ctx context.Context, blueprintIdentifier, entityIdentifier string) (Entity, error) {
-	resp, err := c.request(ctx, "GET", fmt.Sprintf("/v1/blueprints/%s/entities/%s", blueprintIdentifier, entityIdentifier), nil, nil)
+	resp, err := c.request(ctx, "GET", fmt.Sprintf("/blueprints/%s/entities/%s", blueprintIdentifier, entityIdentifier), nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -310,7 +310,7 @@ func (c *Client) CreateEntityWithParams(ctx context.Context, blueprintIdentifier
 		params["upsert"] = "false"
 	}
 
-	resp, err := c.request(ctx, "POST", fmt.Sprintf("/v1/blueprints/%s/entities", blueprintIdentifier), entity, params)
+	resp, err := c.request(ctx, "POST", fmt.Sprintf("/blueprints/%s/entities", blueprintIdentifier), entity, params)
 	if err != nil {
 		return nil, err
 	}
@@ -328,7 +328,7 @@ func (c *Client) CreateEntityWithParams(ctx context.Context, blueprintIdentifier
 
 // PatchEntity updates an existing entity with a partial payload (PATCH).
 func (c *Client) PatchEntity(ctx context.Context, blueprintIdentifier, entityIdentifier string, patch Entity) (Entity, error) {
-	resp, err := c.request(ctx, "PATCH", fmt.Sprintf("/v1/blueprints/%s/entities/%s", blueprintIdentifier, entityIdentifier), patch, nil)
+	resp, err := c.request(ctx, "PATCH", fmt.Sprintf("/blueprints/%s/entities/%s", blueprintIdentifier, entityIdentifier), patch, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -346,7 +346,7 @@ func (c *Client) PatchEntity(ctx context.Context, blueprintIdentifier, entityIde
 
 // DeleteEntity deletes an entity.
 func (c *Client) DeleteEntity(ctx context.Context, blueprintIdentifier, entityIdentifier string) error {
-	resp, err := c.request(ctx, "DELETE", fmt.Sprintf("/v1/blueprints/%s/entities/%s", blueprintIdentifier, entityIdentifier), nil, nil)
+	resp, err := c.request(ctx, "DELETE", fmt.Sprintf("/blueprints/%s/entities/%s", blueprintIdentifier, entityIdentifier), nil, nil)
 	if err != nil {
 		return err
 	}

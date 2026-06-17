@@ -15,9 +15,9 @@
  *   The `create` command implements auto-detect upsert logic based on entity existence:
  *   | Pre-state (GET /{blueprint}/entities/{id}) | --patch flag | API call | query params |
  *   |-------------------------------------------|--------------|----------|--------------|
- *   | 404 (not found)                            | any          | POST /v1/blueprints/{bp}/entities | upsert=false |
- *   | 200 (exists)                               | false        | POST /v1/blueprints/{bp}/entities | upsert=true&merge=false |
- *   | 200 (exists)                               | true         | POST /v1/blueprints/{bp}/entities | upsert=true&merge=true |
+ *   | 404 (not found)                            | any          | POST /blueprints/{bp}/entities | upsert=false |
+ *   | 200 (exists)                               | false        | POST /blueprints/{bp}/entities | upsert=true&merge=false |
+ *   | 200 (exists)                               | true         | POST /blueprints/{bp}/entities | upsert=true&merge=true |
  *
  *   When entity exists and `--force` is NOT set:
  *     - Prompt user with confirmAction("Entity <id> exists. Overwrite?", force, stdin)
@@ -26,14 +26,14 @@
  *   When `--force` is set → skip prompt, proceed directly
  *
  * @behavior list
- *   - GET /v1/blueprints/{blueprint}/entities
+ *   - GET /blueprints/{blueprint}/entities (NO /v1 prefix — base URL includes it)
  *   - Output formats:
  *     - table: columns IDENTIFIER, TITLE, TEAM; empty result → print "No entities found in blueprint <bp>", exit 0
  *     - json: raw JSON array
  *     - yaml: raw YAML array
  *
  * @behavior get
- *   - GET /v1/blueprints/{blueprint}/entities/{id}
+ *   - GET /blueprints/{blueprint}/entities/{id} (NO /v1 prefix)
  *   - Pre-flight: validate identifier via validateEntityIdentifier(id); reject if contains '/'
  *   - 404 → error, exit 1
  *   - Output formats: json (default), yaml
@@ -43,10 +43,10 @@
  *   - Extract identifier from entity["identifier"]
  *   - Pre-flight: validate identifier via validateEntityIdentifier; reject if contains '/'
  *   - Warn on unknown fields via detectUnknownEntityFields → print to stderr
- *   - Existence probe: GET /v1/blueprints/{blueprint}/entities/{identifier}
+ *   - Existence probe: GET /blueprints/{blueprint}/entities/{identifier}
  *   - Decision tree per table above
  *   - Confirmation: if entity exists and !force → confirmAction, abort on decline
- *   - POST to /v1/blueprints/{blueprint}/entities with query params per table
+ *   - POST to /blueprints/{blueprint}/entities with query params per table
  *   - Success messages:
  *     - 404 pre-state → "Created entity <id>"
  *     - exists + !patch → "Replaced entity <id>"
@@ -58,14 +58,14 @@
  *   - Extract file's identifier from entity["identifier"]
  *   - Pre-flight: if file identifier != arg identifier → error "Identifier mismatch: file has '<file_id>', expected '<arg_id>'", NO API call
  *   - Pre-flight: validate arg identifier via validateEntityIdentifier
- *   - PATCH /v1/blueprints/{blueprint}/entities/{id} with entity body
+ *   - PATCH /blueprints/{blueprint}/entities/{id} with entity body (NO /v1 prefix)
  *   - --force flag: if set, skip confirmation (future-proofing; PATCH is direct, no probe)
  *
  * @behavior delete
  *   - Requires positional arg <id>
  *   - Pre-flight: validate identifier via validateEntityIdentifier
  *   - If !force → confirmAction("Delete entity <id>?", force, stdin); abort on decline
- *   - DELETE /v1/blueprints/{blueprint}/entities/{id}
+ *   - DELETE /blueprints/{blueprint}/entities/{id} (NO /v1 prefix)
  *
  * @client-injection-seam
  *   Commands must support test-time client injection. Chosen approach:
@@ -149,7 +149,7 @@ func TestEntitiesListNonEmpty(t *testing.T) {
 		if authHandlerForEntities(w, r) {
 			return
 		}
-		if r.Method == "GET" && r.URL.Path == "/v1/blueprints/service/entities" {
+		if r.Method == "GET" && r.URL.Path == "/blueprints/service/entities" {
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]interface{}{
 				"entities": []map[string]interface{}{
@@ -192,7 +192,7 @@ func TestEntitiesListEmpty(t *testing.T) {
 		if authHandlerForEntities(w, r) {
 			return
 		}
-		if r.Method == "GET" && r.URL.Path == "/v1/blueprints/service/entities" {
+		if r.Method == "GET" && r.URL.Path == "/blueprints/service/entities" {
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]interface{}{
 				"entities": []interface{}{},
@@ -232,7 +232,7 @@ func TestEntitiesGetFound(t *testing.T) {
 		if authHandlerForEntities(w, r) {
 			return
 		}
-		if r.Method == "GET" && r.URL.Path == "/v1/blueprints/service/entities/svc-1" {
+		if r.Method == "GET" && r.URL.Path == "/blueprints/service/entities/svc-1" {
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]interface{}{
 				"entity": map[string]interface{}{
@@ -276,7 +276,7 @@ func TestEntitiesGetNotFound(t *testing.T) {
 		if authHandlerForEntities(w, r) {
 			return
 		}
-		if r.Method == "GET" && r.URL.Path == "/v1/blueprints/service/entities/missing" {
+		if r.Method == "GET" && r.URL.Path == "/blueprints/service/entities/missing" {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
@@ -338,12 +338,12 @@ func TestEntitiesCreateWhenNotExists(t *testing.T) {
 			return
 		}
 		// Existence probe
-		if r.Method == "GET" && r.URL.Path == "/v1/blueprints/service/entities/new-svc" {
+		if r.Method == "GET" && r.URL.Path == "/blueprints/service/entities/new-svc" {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
 		// Create call
-		if r.Method == "POST" && r.URL.Path == "/v1/blueprints/service/entities" {
+		if r.Method == "POST" && r.URL.Path == "/blueprints/service/entities" {
 			query := r.URL.Query()
 			if query.Get("upsert") != "false" {
 				t.Errorf("expected upsert=false, got %s", query.Get("upsert"))
@@ -394,7 +394,7 @@ func TestEntitiesCreateWhenExistsReplaceWithForce(t *testing.T) {
 			return
 		}
 		// Existence probe → exists
-		if r.Method == "GET" && r.URL.Path == "/v1/blueprints/service/entities/existing-svc" {
+		if r.Method == "GET" && r.URL.Path == "/blueprints/service/entities/existing-svc" {
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]interface{}{
 				"entity": map[string]interface{}{
@@ -405,7 +405,7 @@ func TestEntitiesCreateWhenExistsReplaceWithForce(t *testing.T) {
 			return
 		}
 		// Upsert call (no --patch → merge=false)
-		if r.Method == "POST" && r.URL.Path == "/v1/blueprints/service/entities" {
+		if r.Method == "POST" && r.URL.Path == "/blueprints/service/entities" {
 			query := r.URL.Query()
 			if query.Get("upsert") != "true" {
 				t.Errorf("expected upsert=true, got %s", query.Get("upsert"))
@@ -459,7 +459,7 @@ func TestEntitiesCreateWhenExistsPatchWithForce(t *testing.T) {
 			return
 		}
 		// Existence probe → exists
-		if r.Method == "GET" && r.URL.Path == "/v1/blueprints/service/entities/existing-svc" {
+		if r.Method == "GET" && r.URL.Path == "/blueprints/service/entities/existing-svc" {
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]interface{}{
 				"entity": map[string]interface{}{
@@ -470,7 +470,7 @@ func TestEntitiesCreateWhenExistsPatchWithForce(t *testing.T) {
 			return
 		}
 		// Upsert call with --patch → merge=true
-		if r.Method == "POST" && r.URL.Path == "/v1/blueprints/service/entities" {
+		if r.Method == "POST" && r.URL.Path == "/blueprints/service/entities" {
 			query := r.URL.Query()
 			if query.Get("upsert") != "true" {
 				t.Errorf("expected upsert=true, got %s", query.Get("upsert"))
@@ -525,7 +525,7 @@ func TestEntitiesCreateConfirmationDeclined(t *testing.T) {
 			return
 		}
 		// Existence probe → exists
-		if r.Method == "GET" && r.URL.Path == "/v1/blueprints/service/entities/existing-svc" {
+		if r.Method == "GET" && r.URL.Path == "/blueprints/service/entities/existing-svc" {
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]interface{}{
 				"entity": map[string]interface{}{
@@ -536,7 +536,7 @@ func TestEntitiesCreateConfirmationDeclined(t *testing.T) {
 			return
 		}
 		// POST should NOT be called if confirmation declined
-		if r.Method == "POST" && r.URL.Path == "/v1/blueprints/service/entities" {
+		if r.Method == "POST" && r.URL.Path == "/blueprints/service/entities" {
 			postCalled = true
 			t.Error("POST called despite confirmation declined")
 		}
@@ -642,7 +642,7 @@ func TestEntitiesUpdate(t *testing.T) {
 		if authHandlerForEntities(w, r) {
 			return
 		}
-		if r.Method == "PATCH" && r.URL.Path == "/v1/blueprints/service/entities/svc-1" {
+		if r.Method == "PATCH" && r.URL.Path == "/blueprints/service/entities/svc-1" {
 			patchReceived = true
 			var body map[string]interface{}
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -722,7 +722,7 @@ func TestEntitiesDeleteWithForce(t *testing.T) {
 		if authHandlerForEntities(w, r) {
 			return
 		}
-		if r.Method == "DELETE" && r.URL.Path == "/v1/blueprints/service/entities/svc-1" {
+		if r.Method == "DELETE" && r.URL.Path == "/blueprints/service/entities/svc-1" {
 			deleteReceived = true
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -754,7 +754,7 @@ func TestEntitiesDeleteConfirmationDeclined(t *testing.T) {
 		if authHandlerForEntities(w, r) {
 			return
 		}
-		if r.Method == "DELETE" && r.URL.Path == "/v1/blueprints/service/entities/svc-1" {
+		if r.Method == "DELETE" && r.URL.Path == "/blueprints/service/entities/svc-1" {
 			deleteCalled = true
 			t.Error("DELETE called despite confirmation declined")
 		}
@@ -816,7 +816,7 @@ func TestEntitiesGetYAMLOutput(t *testing.T) {
 		if authHandlerForEntities(w, r) {
 			return
 		}
-		if r.Method == "GET" && r.URL.Path == "/v1/blueprints/service/entities/svc-1" {
+		if r.Method == "GET" && r.URL.Path == "/blueprints/service/entities/svc-1" {
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]interface{}{
 				"entity": map[string]interface{}{
@@ -867,12 +867,12 @@ func TestEntitiesCreateQueryParamsFormatting(t *testing.T) {
 			return
 		}
 		// Existence probe → not found
-		if r.Method == "GET" && r.URL.Path == "/v1/blueprints/service/entities/new-svc" {
+		if r.Method == "GET" && r.URL.Path == "/blueprints/service/entities/new-svc" {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
 		// Create call → verify query params are properly formatted
-		if r.Method == "POST" && r.URL.Path == "/v1/blueprints/service/entities" {
+		if r.Method == "POST" && r.URL.Path == "/blueprints/service/entities" {
 			rawQuery := r.URL.RawQuery
 			parsed, err := url.ParseQuery(rawQuery)
 			if err != nil {

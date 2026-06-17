@@ -225,7 +225,7 @@ func TestGetSkills_FallsBackToLegacyEntitiesWhenRelationMissing(t *testing.T) {
 	if len(entities) != 1 || entities[0]["identifier"] != "legacy-skill" {
 		t.Fatalf("unexpected entities: %+v", entities)
 	}
-	expected := []string{"/blueprints/skill/entities/search", "/v1/blueprints/skill/entities"}
+	expected := []string{"/blueprints/skill/entities/search", "/blueprints/skill/entities"}
 	if len(paths) != len(expected) {
 		t.Fatalf("expected paths %v, got %v", expected, paths)
 	}
@@ -488,7 +488,7 @@ func TestCallGenericPOSTAPI(t *testing.T) {
  * @interface CreateEntityWithParams(ctx context.Context, blueprintIdentifier string, entity Entity, upsert, merge bool) (Entity, error)
  * @interface PatchEntity(ctx context.Context, blueprintIdentifier, entityIdentifier string, patch Entity) (Entity, error)
  * @behavior CreateEntityWithParams
- *   - POSTs to /v1/blueprints/{blueprintIdentifier}/entities
+ *   - POSTs to /blueprints/{blueprintIdentifier}/entities (NO /v1 prefix — base URL includes it)
  *   - When upsert=false: adds query param ?upsert=false, NO merge param
  *   - When upsert=true, merge=false: adds query params ?upsert=true&merge=false
  *   - When upsert=true, merge=true: adds query params ?upsert=true&merge=true
@@ -496,7 +496,7 @@ func TestCallGenericPOSTAPI(t *testing.T) {
  *   - Unwraps response {"entity": {...}} and returns the entity
  *   - Returns error on HTTP 409 (conflict), 401, or other non-2xx
  * @behavior PatchEntity
- *   - PATCHes to /v1/blueprints/{blueprintIdentifier}/entities/{entityIdentifier}
+ *   - PATCHes to /blueprints/{blueprintIdentifier}/entities/{entityIdentifier} (NO /v1 prefix)
  *   - Sends patch as JSON request body
  *   - Unwraps response {"entity": {...}} and returns the entity
  *   - Returns error on HTTP 404 or other non-2xx
@@ -545,8 +545,8 @@ func TestCreateEntityWithParams_UpsertFalse(t *testing.T) {
 	if receivedMethod != "POST" {
 		t.Errorf("expected POST, got %s", receivedMethod)
 	}
-	if receivedPath != "/v1/blueprints/my-blueprint/entities" {
-		t.Errorf("expected /v1/blueprints/my-blueprint/entities, got %s", receivedPath)
+	if receivedPath != "/blueprints/my-blueprint/entities" {
+		t.Errorf("expected /blueprints/my-blueprint/entities, got %s", receivedPath)
 	}
 	if receivedQuery != "upsert=false" {
 		t.Errorf("expected query 'upsert=false' (no merge), got '%s'", receivedQuery)
@@ -710,8 +710,8 @@ func TestPatchEntity_HappyPath(t *testing.T) {
 	if receivedMethod != "PATCH" {
 		t.Errorf("expected PATCH, got %s", receivedMethod)
 	}
-	if receivedPath != "/v1/blueprints/my-blueprint/entities/patched-entity" {
-		t.Errorf("expected /v1/blueprints/my-blueprint/entities/patched-entity, got %s", receivedPath)
+	if receivedPath != "/blueprints/my-blueprint/entities/patched-entity" {
+		t.Errorf("expected /blueprints/my-blueprint/entities/patched-entity, got %s", receivedPath)
 	}
 	if receivedBody["title"] != "Updated Title" {
 		t.Errorf("unexpected patch body: %+v", receivedBody)
