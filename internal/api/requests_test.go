@@ -6,6 +6,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -467,16 +469,210 @@ func TestCallGenericPOSTAPI(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(ClientOpts{ClientID: "id", ClientSecret: "secret", APIURL: server.URL, Timeout: 0})
-	res, err := client.Request(context.Background(), RequestParams{
-		Method:   "POST",
-		Data:     map[string]any{"properties": map[string]any{}},
-		Endpoint: "/actions/my-action/runs",
-	},
+	res, err := client.Request(
+		context.Background(), RequestParams{
+			Method:   "POST",
+			Data:     map[string]any{"properties": map[string]any{}},
+			Endpoint: "/actions/my-action/runs",
+		},
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if res, ok := res.(map[string]any); ok && res["ok"] != true {
 		t.Error("expected entities permissions")
+	}
+}
+
+// @spec-handoff
+// @interface UpsertSkillEntity(ctx context.Context, entity Entity, upsert bool, merge bool) (Entity, error)
+// @interface PatchSkillEntity(ctx context.Context, identifier string, entity Entity) (Entity, error)
+//
+// @behavior
+//   - UpsertSkillEntity issues POST /blueprints/skill/entities with query params
+//     upsert=<upsert>&merge=<merge>; body is the Entity; response is {"entity":{...}}.
+//   - PatchSkillEntity issues PATCH /blueprints/skill/entities/<identifier>;
+//     body is the Entity; response is {"entity":{...}}.
+//   - Both methods decode the "entity" wrapper and return the inner Entity.
+//   - Both methods return a non-nil error when the server responds with 4xx/5xx.
+//
+// @edge-cases
+//   - Path MUST NOT include /v1 — the base URL already contains it.
+//     Assert r.URL.Path == "/blueprints/skill/entities" (no /v1 prefix).
+//   - UpsertSkillEntity, merge=true (default): query param merge=true.
+//   - UpsertSkillEntity, merge=false (force replace): query param merge=false.
+//   - Server 500 → err != nil, error string carries the HTTP status.
+//   - Server 404 → err != nil.
+//
+// @see internal/api/requests.go — CreateEntity for analogous POST+entity-wrapper pattern.
+// @see internal/api/client.go  — request() for query-param wiring via params map[string]string.
+
+func TestUpsertSkillEntity_DefaultMerge(t *testing.T) {
+	var requestCount int
+	var capturedMethod string
+	var capturedPath string
+	var capturedQuery string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/auth/access_token" {
+			json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "accessToken": "tok", "expiresIn": 3600})
+			return
+		}
+		requestCount++
+		capturedMethod = r.Method
+		capturedPath = r.URL.Path
+		capturedQuery = r.URL.RawQuery
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"entity": map[string]interface{}{
+				"identifier": "skill-upsert-1",
+				"title":      "Upserted Skill",
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := NewClient(ClientOpts{ClientID: "id", ClientSecret: "secret", APIURL: server.URL, Timeout: 0})
+	entity, err := client.UpsertSkillEntity(context.Background(), Entity{"identifier": "skill-upsert-1", "title": "Upserted Skill"}, true, true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if requestCount != 1 {
+		t.Fatalf("expected exactly 1 request, got %d", requestCount)
+	}
+	if capturedMethod != http.MethodPost {
+		t.Fatalf("expected POST, got %s", capturedMethod)
+	}
+	if capturedPath != "/blueprints/skill/entities" {
+		t.Fatalf("expected path /blueprints/skill/entities (no /v1), got %s", capturedPath)
+	}
+	q, err := url.ParseQuery(capturedQuery)
+	if err != nil {
+		t.Fatalf("failed to parse query: %v", err)
+	}
+	if q.Get("upsert") != "true" {
+		t.Errorf("expected upsert=true, got %q", q.Get("upsert"))
+	}
+	if q.Get("merge") != "true" {
+		t.Errorf("expected merge=true, got %q", q.Get("merge"))
+	}
+	if entity["identifier"] != "skill-upsert-1" {
+		t.Errorf("expected identifier skill-upsert-1, got %v", entity["identifier"])
+	}
+}
+
+func TestUpsertSkillEntity_ForceReplace(t *testing.T) {
+	var capturedQuery string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/auth/access_token" {
+			json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "accessToken": "tok", "expiresIn": 3600})
+			return
+		}
+		capturedQuery = r.URL.RawQuery
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"entity": map[string]interface{}{
+				"identifier": "skill-upsert-2",
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := NewClient(ClientOpts{ClientID: "id", ClientSecret: "secret", APIURL: server.URL, Timeout: 0})
+	_, err := client.UpsertSkillEntity(context.Background(), Entity{"identifier": "skill-upsert-2"}, true, false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	q, err := url.ParseQuery(capturedQuery)
+	if err != nil {
+		t.Fatalf("failed to parse query: %v", err)
+	}
+	if q.Get("merge") != "false" {
+		t.Errorf("expected merge=false (force replace), got %q", q.Get("merge"))
+	}
+	if q.Get("upsert") != "true" {
+		t.Errorf("expected upsert=true, got %q", q.Get("upsert"))
+	}
+}
+
+func TestUpsertSkillEntity_APIError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/auth/access_token" {
+			json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "accessToken": "tok", "expiresIn": 3600})
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]interface{}{"ok": false, "error": "internal_error"})
+	}))
+	defer server.Close()
+
+	client := NewClient(ClientOpts{ClientID: "id", ClientSecret: "secret", APIURL: server.URL, Timeout: 0})
+	_, err := client.UpsertSkillEntity(context.Background(), Entity{"identifier": "skill-fail"}, true, true)
+	if err == nil {
+		t.Fatal("expected error from 500 response, got nil")
+	}
+	if !strings.Contains(err.Error(), "500") && !strings.Contains(err.Error(), "Internal Server Error") {
+		t.Errorf("expected error to contain HTTP status, got: %v", err)
+	}
+}
+
+func TestPatchSkillEntity_Success(t *testing.T) {
+	var requestCount int
+	var capturedMethod string
+	var capturedPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/auth/access_token" {
+			json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "accessToken": "tok", "expiresIn": 3600})
+			return
+		}
+		requestCount++
+		capturedMethod = r.Method
+		capturedPath = r.URL.Path
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"entity": map[string]interface{}{
+				"identifier": "skill-patch-1",
+				"title":      "Patched Skill",
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := NewClient(ClientOpts{ClientID: "id", ClientSecret: "secret", APIURL: server.URL, Timeout: 0})
+	entity, err := client.PatchSkillEntity(context.Background(), "skill-patch-1", Entity{"title": "Patched Skill"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if requestCount != 1 {
+		t.Fatalf("expected exactly 1 request, got %d", requestCount)
+	}
+	if capturedMethod != http.MethodPatch {
+		t.Fatalf("expected PATCH, got %s", capturedMethod)
+	}
+	if capturedPath != "/blueprints/skill/entities/skill-patch-1" {
+		t.Fatalf("expected path /blueprints/skill/entities/skill-patch-1, got %s", capturedPath)
+	}
+	if entity["identifier"] != "skill-patch-1" {
+		t.Errorf("expected identifier skill-patch-1, got %v", entity["identifier"])
+	}
+	if entity["title"] != "Patched Skill" {
+		t.Errorf("expected title Patched Skill, got %v", entity["title"])
+	}
+}
+
+func TestPatchSkillEntity_NotFound(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/auth/access_token" {
+			json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "accessToken": "tok", "expiresIn": 3600})
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]interface{}{"ok": false, "error": "not_found"})
+	}))
+	defer server.Close()
+
+	client := NewClient(ClientOpts{ClientID: "id", ClientSecret: "secret", APIURL: server.URL, Timeout: 0})
+	_, err := client.PatchSkillEntity(context.Background(), "nonexistent-skill", Entity{"title": "Ghost"})
+	if err == nil {
+		t.Fatal("expected error from 404 response, got nil")
+	}
+	if !strings.Contains(err.Error(), "404") && !strings.Contains(err.Error(), "Not Found") {
+		t.Errorf("expected error to contain HTTP status, got: %v", err)
 	}
 }
