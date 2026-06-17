@@ -223,6 +223,29 @@ func TestEntitiesListEmpty(t *testing.T) {
 	}
 }
 
+func TestEntitiesListBlueprintWithSlash(t *testing.T) {
+	_, client := newTestServerForEntities(t, func(w http.ResponseWriter, r *http.Request) {
+		if authHandlerForEntities(w, r) {
+			return
+		}
+		t.Fatal("should not reach API call for invalid blueprint identifier")
+	})
+
+	testClient = client
+	defer func() { testClient = nil }()
+
+	rootCmd := &cobra.Command{Use: "port"}
+	RegisterEntities(rootCmd)
+
+	rootCmd.SetOut(io.Discard)
+	rootCmd.SetErr(io.Discard)
+	rootCmd.SetArgs([]string{"entities", "list", "-b", "../admin"})
+
+	if err := rootCmd.Execute(); err == nil {
+		t.Fatal("expected error for blueprint identifier with slash, got nil")
+	}
+}
+
 // ====================================================================
 // get command tests
 // ====================================================================
