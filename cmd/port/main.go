@@ -145,6 +145,8 @@ Credentials can be provided via:
 	commands.RegisterMigrate(rootCmd)
 	commands.RegisterCompare(rootCmd)
 	commands.RegisterAPI(rootCmd)
+	commands.RegisterEntities(rootCmd)
+	commands.RegisterAgents(rootCmd)
 	commands.RegisterVersion(rootCmd)
 	commands.RegisterConfig(rootCmd)
 	commands.RegisterCompletion(rootCmd)
