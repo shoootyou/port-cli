@@ -141,9 +141,13 @@ func (c *Client) request(ctx context.Context, method, path string, data any, par
 
 	url := fmt.Sprintf("%s%s", c.apiURL, path)
 
-	var reqBody io.Reader
+	var (
+		reqBody  io.Reader
+		jsonData []byte
+	)
 	if data != nil {
-		jsonData, err := json.Marshal(data)
+		var err error
+		jsonData, err = json.Marshal(data)
 		if err != nil {
 			return nil, fmt.Errorf("failed to marshal request body: %w", err)
 		}
@@ -156,7 +160,9 @@ func (c *Client) request(ctx context.Context, method, path string, data any, par
 	}
 
 	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
-	req.Header.Set("Content-Type", "application/json")
+	if jsonData != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	req.Header.Set("User-Agent", useragent.String())
 
 	// Add query parameters
