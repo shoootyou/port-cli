@@ -65,7 +65,8 @@ func main() {
 				lipgloss.JoinVertical(
 					lipgloss.Left,
 					styles.Bold.Render("Port CLI\n"),
-					lipgloss.NewStyle().Faint(true).Render("Modular command-line interface for Port")),
+					lipgloss.NewStyle().Faint(true).Render("Modular command-line interface for Port"),
+				),
 			),
 		) + "\n\n" +
 			`Manage your Port organization with import/export, migration, and API operations.
@@ -149,6 +150,7 @@ Credentials can be provided via:
 	commands.RegisterCompletion(rootCmd)
 	commands.RegisterSkills(rootCmd)
 	commands.RegisterCache(rootCmd)
+	commands.RegisterWorkflows(rootCmd)
 
 	if commands.HasTreeFlag(os.Args[1:]) {
 		target := commands.ResolveTreeTarget(rootCmd, os.Args[1:])
@@ -175,7 +177,8 @@ Credentials can be provided via:
 		themeFunc,
 		fang.WithVersion(version),
 		fang.WithCommit(commit),
-		fang.WithNotifySignal(os.Interrupt)); err != nil {
+		fang.WithNotifySignal(os.Interrupt),
+	); err != nil {
 		output.Init(false)
 		output.SetVerbosity(output.NormalLevel)
 		formattedErr := output.FormatError(err)
