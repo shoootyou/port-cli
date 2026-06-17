@@ -152,6 +152,7 @@ Credentials can be provided via:
 	commands.RegisterCompletion(rootCmd)
 	commands.RegisterSkills(rootCmd)
 	commands.RegisterCache(rootCmd)
+	commands.RegisterWorkflows(rootCmd)
 
 	if commands.HasTreeFlag(os.Args[1:]) {
 		target := commands.ResolveTreeTarget(rootCmd, os.Args[1:])

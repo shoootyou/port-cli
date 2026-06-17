@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -39,6 +40,9 @@ type Integration map[string]interface{}
 
 // Permissions represents Port resource permissions.
 type Permissions map[string]interface{}
+
+// ErrWorkflowNotFound is returned when a workflow is not found (HTTP 404).
+var ErrWorkflowNotFound = errors.New("workflow not found")
 
 type RequestParams struct {
 	Method   string
@@ -1135,4 +1139,74 @@ func (c *Client) GetSkillFilesForVersions(ctx context.Context, versionIdentifier
 			},
 		},
 	})
+}
+
+// GetWorkflows retrieves all workflows.
+func (c *Client) GetWorkflows(ctx context.Context) ([]map[string]interface{}, error) {
+	resp, err := c.request(ctx, "GET", "/workflows", nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Workflows []map[string]interface{} `json:"workflows"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode workflows: %w", err)
+	}
+
+	return result.Workflows, nil
+}
+
+// GetWorkflow retrieves a specific workflow by identifier.
+func (c *Client) GetWorkflow(ctx context.Context, identifier string) (map[string]interface{}, error) {
+	resp, err := c.request(ctx, "GET", fmt.Sprintf("/workflows/%s", identifier), nil, nil)
+	if err != nil {
+		// COUPLING: 404 is detected by matching the request() error string (which embeds the HTTP status).
+		// A structured APIError type would be cleaner but requires a systemic client.go refactor (+ the
+		// permission-retry regex in import.go). Tracked as a deferred finding. See gotchas/port-cli.md.
+		if strings.Contains(err.Error(), "404") {
+			return nil, fmt.Errorf("workflow %s: %w", identifier, ErrWorkflowNotFound)
+		}
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Workflow map[string]interface{} `json:"workflow"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode workflow: %w", err)
+	}
+
+	return result.Workflow, nil
+}
+
+// CreateWorkflow creates a new workflow.
+func (c *Client) CreateWorkflow(ctx context.Context, body map[string]interface{}) (map[string]interface{}, error) {
+	resp, err := c.request(ctx, "POST", "/workflows", body, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Workflow map[string]interface{} `json:"workflow"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode workflow: %w", err)
+	}
+
+	return result.Workflow, nil
+}
+
+// DeleteWorkflow deletes a workflow by identifier.
+func (c *Client) DeleteWorkflow(ctx context.Context, identifier string) error {
+	resp, err := c.request(ctx, "DELETE", fmt.Sprintf("/workflows/%s", identifier), nil, nil)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	return nil
 }
