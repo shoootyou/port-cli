@@ -746,3 +746,109 @@ func TestPatchEntity_NotFound(t *testing.T) {
 		t.Error("expected error on 404 not found, got nil")
 	}
 }
+
+// ====================================================================
+// /v1 double-prefix regression tests (should PASS now)
+// ====================================================================
+
+func TestCreateEntityWithParams_PathHasNoV1Prefix(t *testing.T) {
+	var receivedPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/auth/access_token" {
+			json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "accessToken": "tok", "expiresIn": 3600})
+			return
+		}
+		receivedPath = r.URL.Path
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"ok": true,
+			"entity": map[string]interface{}{
+				"identifier": "test-entity",
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := NewClient(ClientOpts{ClientID: "id", ClientSecret: "secret", APIURL: server.URL, Timeout: 0})
+	_, err := client.CreateEntityWithParams(context.Background(), "my-blueprint", Entity{
+		"identifier": "test-entity",
+	}, false, false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Assert path starts with /blueprints/ and does NOT start with /v1/
+	if !strings.HasPrefix(receivedPath, "/blueprints/") {
+		t.Errorf("expected path to start with /blueprints/, got %s", receivedPath)
+	}
+	if strings.HasPrefix(receivedPath, "/v1/") {
+		t.Errorf("path must NOT start with /v1/ (base URL already includes it), got %s", receivedPath)
+	}
+}
+
+func TestPatchEntity_PathHasNoV1Prefix(t *testing.T) {
+	var receivedPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/auth/access_token" {
+			json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "accessToken": "tok", "expiresIn": 3600})
+			return
+		}
+		receivedPath = r.URL.Path
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"ok": true,
+			"entity": map[string]interface{}{
+				"identifier": "test-entity",
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := NewClient(ClientOpts{ClientID: "id", ClientSecret: "secret", APIURL: server.URL, Timeout: 0})
+	_, err := client.PatchEntity(context.Background(), "my-blueprint", "test-entity", Entity{
+		"title": "Updated",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Assert path starts with /blueprints/ and does NOT start with /v1/
+	if !strings.HasPrefix(receivedPath, "/blueprints/") {
+		t.Errorf("expected path to start with /blueprints/, got %s", receivedPath)
+	}
+	if strings.HasPrefix(receivedPath, "/v1/") {
+		t.Errorf("path must NOT start with /v1/ (base URL already includes it), got %s", receivedPath)
+	}
+}
+
+// ====================================================================
+// 401 positive assertion improvement
+// ====================================================================
+
+func TestCreateEntityWithParams_UnauthorizedPositiveAssertion(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/auth/access_token" {
+			json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "accessToken": "tok", "expiresIn": 3600})
+			return
+		}
+		w.WriteHeader(http.StatusUnauthorized)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"ok":      false,
+			"message": "unauthorized secret body content",
+		})
+	}))
+	defer server.Close()
+
+	client := NewClient(ClientOpts{ClientID: "id", ClientSecret: "secret", APIURL: server.URL, Timeout: 0})
+	_, err := client.CreateEntityWithParams(context.Background(), "my-blueprint", Entity{
+		"identifier": "unauth-entity",
+	}, false, false)
+	// Positive assertions: error is non-nil and mentions 401/unauthorized/failed
+	if err == nil {
+		t.Fatal("expected error on 401 unauthorized, got nil")
+	}
+	errMsg := err.Error()
+	if !strings.Contains(errMsg, "401") && !strings.Contains(errMsg, "unauthorized") && !strings.Contains(errMsg, "Unauthorized") && !strings.Contains(errMsg, "failed") {
+		t.Errorf("expected error message to mention 401/unauthorized/failed, got: %v", errMsg)
+	}
+	// Negative assertion: must NOT leak response body
+	if strings.Contains(errMsg, "secret body content") {
+		t.Errorf("401 error must not leak response body, got: %v", err)
+	}
+}

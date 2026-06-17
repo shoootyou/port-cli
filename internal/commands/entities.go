@@ -43,6 +43,13 @@ func registerEntitiesList() *cobra.Command {
 		Use:   "list",
 		Short: "List entities in a blueprint",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validateEntityIdentifier(blueprint); err != nil {
+				if errors.Is(err, ErrInvalidIdentifier) {
+					return fmt.Errorf("invalid blueprint identifier: %s", blueprint)
+				}
+				return err
+			}
+
 			client, err := getClientForEntities(cmd, org)
 			if err != nil {
 				return err
@@ -104,6 +111,13 @@ func registerEntitiesGet() *cobra.Command {
 				return err
 			}
 
+			if err := validateEntityIdentifier(blueprint); err != nil {
+				if errors.Is(err, ErrInvalidIdentifier) {
+					return fmt.Errorf("invalid blueprint identifier: %s", blueprint)
+				}
+				return err
+			}
+
 			client, err := getClientForEntities(cmd, org)
 			if err != nil {
 				return err
@@ -149,6 +163,13 @@ func registerEntitiesCreate() *cobra.Command {
 		Use:   "create",
 		Short: "Create a new entity with auto-detect upsert",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validateEntityIdentifier(blueprint); err != nil {
+				if errors.Is(err, ErrInvalidIdentifier) {
+					return fmt.Errorf("invalid blueprint identifier: %s", blueprint)
+				}
+				return err
+			}
+
 			entity, err := parseEntityFile(file)
 			if err != nil {
 				if errors.Is(err, ErrSymlink) {
@@ -205,7 +226,7 @@ func registerEntitiesCreate() *cobra.Command {
 				confirmed, err := confirmAction(
 					fmt.Sprintf("Entity %s exists. Overwrite?", identifier),
 					force,
-					nil, // production uses TUI
+					cmd.InOrStdin(),
 				)
 				if err != nil {
 					return fmt.Errorf("confirmation failed: %w", err)
@@ -261,6 +282,13 @@ func registerEntitiesUpdate() *cobra.Command {
 			if err := validateEntityIdentifier(id); err != nil {
 				if errors.Is(err, ErrInvalidIdentifier) {
 					return fmt.Errorf("invalid identifier: %s", id)
+				}
+				return err
+			}
+
+			if err := validateEntityIdentifier(blueprint); err != nil {
+				if errors.Is(err, ErrInvalidIdentifier) {
+					return fmt.Errorf("invalid blueprint identifier: %s", blueprint)
 				}
 				return err
 			}
@@ -333,11 +361,18 @@ func registerEntitiesDelete() *cobra.Command {
 				return err
 			}
 
+			if err := validateEntityIdentifier(blueprint); err != nil {
+				if errors.Is(err, ErrInvalidIdentifier) {
+					return fmt.Errorf("invalid blueprint identifier: %s", blueprint)
+				}
+				return err
+			}
+
 			// Confirm deletion (unless --force)
 			confirmed, err := confirmAction(
 				fmt.Sprintf("Delete entity %s?", id),
 				force,
-				nil, // production uses TUI
+				cmd.InOrStdin(),
 			)
 			if err != nil {
 				return fmt.Errorf("confirmation failed: %w", err)

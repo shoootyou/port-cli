@@ -626,6 +626,185 @@ func TestEntitiesCreateFileTooLarge(t *testing.T) {
 }
 
 // ====================================================================
+// Blueprint identifier validation tests (RED — validation not yet implemented)
+// ====================================================================
+
+func TestEntitiesGetBlueprintWithSlash(t *testing.T) {
+	_, client := newTestServerForEntities(t, func(w http.ResponseWriter, r *http.Request) {
+		if authHandlerForEntities(w, r) {
+			return
+		}
+		t.Fatal("should not reach API call for invalid blueprint identifier")
+	})
+
+	testClient = client
+	defer func() { testClient = nil }()
+
+	rootCmd := &cobra.Command{Use: "port"}
+	RegisterEntities(rootCmd)
+
+	rootCmd.SetOut(io.Discard)
+	rootCmd.SetErr(io.Discard)
+	rootCmd.SetArgs([]string{"entities", "get", "valid-id", "-b", "../admin"})
+
+	if err := rootCmd.Execute(); err == nil {
+		t.Fatal("expected error for blueprint identifier with slash, got nil")
+	}
+}
+
+func TestEntitiesCreateBlueprintWithSlash(t *testing.T) {
+	tmpDir := t.TempDir()
+	entityFile := filepath.Join(tmpDir, "entity.json")
+	content := `{"identifier": "valid-id", "title": "Valid"}`
+	if err := os.WriteFile(entityFile, []byte(content), 0o644); err != nil {
+		t.Fatalf("failed to create test file: %v", err)
+	}
+
+	_, client := newTestServerForEntities(t, func(w http.ResponseWriter, r *http.Request) {
+		if authHandlerForEntities(w, r) {
+			return
+		}
+		t.Fatal("should not reach API call for invalid blueprint identifier")
+	})
+
+	testClient = client
+	defer func() { testClient = nil }()
+
+	rootCmd := &cobra.Command{Use: "port"}
+	RegisterEntities(rootCmd)
+
+	rootCmd.SetOut(io.Discard)
+	rootCmd.SetErr(io.Discard)
+	rootCmd.SetArgs([]string{"entities", "create", "-b", "team/foo", "--file", entityFile, "--force"})
+
+	if err := rootCmd.Execute(); err == nil {
+		t.Fatal("expected error for blueprint identifier with slash, got nil")
+	}
+}
+
+func TestEntitiesUpdateBlueprintWithSlash(t *testing.T) {
+	tmpDir := t.TempDir()
+	entityFile := filepath.Join(tmpDir, "entity.json")
+	content := `{"identifier": "svc-1", "title": "Updated"}`
+	if err := os.WriteFile(entityFile, []byte(content), 0o644); err != nil {
+		t.Fatalf("failed to create test file: %v", err)
+	}
+
+	_, client := newTestServerForEntities(t, func(w http.ResponseWriter, r *http.Request) {
+		if authHandlerForEntities(w, r) {
+			return
+		}
+		t.Fatal("should not reach API call for invalid blueprint identifier")
+	})
+
+	testClient = client
+	defer func() { testClient = nil }()
+
+	rootCmd := &cobra.Command{Use: "port"}
+	RegisterEntities(rootCmd)
+
+	rootCmd.SetOut(io.Discard)
+	rootCmd.SetErr(io.Discard)
+	rootCmd.SetArgs([]string{"entities", "update", "svc-1", "-b", "../admin", "--file", entityFile, "--force"})
+
+	if err := rootCmd.Execute(); err == nil {
+		t.Fatal("expected error for blueprint identifier with slash, got nil")
+	}
+}
+
+func TestEntitiesDeleteBlueprintWithSlash(t *testing.T) {
+	_, client := newTestServerForEntities(t, func(w http.ResponseWriter, r *http.Request) {
+		if authHandlerForEntities(w, r) {
+			return
+		}
+		t.Fatal("should not reach API call for invalid blueprint identifier")
+	})
+
+	testClient = client
+	defer func() { testClient = nil }()
+
+	rootCmd := &cobra.Command{Use: "port"}
+	RegisterEntities(rootCmd)
+
+	rootCmd.SetOut(io.Discard)
+	rootCmd.SetErr(io.Discard)
+	rootCmd.SetArgs([]string{"entities", "delete", "svc-1", "-b", "team/foo", "--force"})
+
+	if err := rootCmd.Execute(); err == nil {
+		t.Fatal("expected error for blueprint identifier with slash, got nil")
+	}
+}
+
+// ====================================================================
+// Confirmation ACCEPTED path (should PASS now)
+// ====================================================================
+
+func TestEntitiesCreateConfirmationAccepted(t *testing.T) {
+	tmpDir := t.TempDir()
+	entityFile := filepath.Join(tmpDir, "entity.json")
+	content := `{"identifier": "existing-svc", "title": "Updated Service"}`
+	if err := os.WriteFile(entityFile, []byte(content), 0o644); err != nil {
+		t.Fatalf("failed to create test file: %v", err)
+	}
+
+	postCalled := false
+	_, client := newTestServerForEntities(t, func(w http.ResponseWriter, r *http.Request) {
+		if authHandlerForEntities(w, r) {
+			return
+		}
+		// Existence probe → exists
+		if r.Method == "GET" && r.URL.Path == "/blueprints/service/entities/existing-svc" {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"entity": map[string]interface{}{
+					"identifier": "existing-svc",
+					"title":      "Old Title",
+				},
+			})
+			return
+		}
+		// POST should be called if confirmation accepted
+		if r.Method == "POST" && r.URL.Path == "/blueprints/service/entities" {
+			postCalled = true
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"entity": map[string]interface{}{
+					"identifier": "existing-svc",
+					"title":      "Updated Service",
+				},
+			})
+			return
+		}
+		http.NotFound(w, r)
+	})
+
+	testClient = client
+	defer func() { testClient = nil }()
+
+	rootCmd := &cobra.Command{Use: "port"}
+	RegisterEntities(rootCmd)
+
+	var stdout bytes.Buffer
+	rootCmd.SetOut(&stdout)
+	rootCmd.SetErr(io.Discard)
+	// Inject stdin with "y" to accept confirmation
+	rootCmd.SetIn(strings.NewReader("y\n"))
+	rootCmd.SetArgs([]string{"entities", "create", "-b", "service", "--file", entityFile})
+
+	err := rootCmd.Execute()
+	if err != nil {
+		t.Fatalf("expected no error when confirmation accepted, got %v", err)
+	}
+	if !postCalled {
+		t.Fatal("POST should have been called after accepted confirmation")
+	}
+	output := stdout.String()
+	if !strings.Contains(output, "Replaced entity existing-svc") {
+		t.Errorf("expected 'Replaced entity existing-svc' message, got: %s", output)
+	}
+}
+
+// ====================================================================
 // update command tests
 // ====================================================================
 

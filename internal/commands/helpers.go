@@ -127,6 +127,8 @@ func confirmAction(prompt string, force bool, stdin io.Reader) (bool, error) {
 
 	// If stdin is provided, read from it (for testing or piped input)
 	if stdin != nil {
+		// Print prompt to stderr so stdout stays clean
+		fmt.Fprintf(os.Stderr, "%s (y/n): ", prompt)
 		scanner := bufio.NewScanner(stdin)
 		if scanner.Scan() {
 			response := strings.TrimSpace(strings.ToLower(scanner.Text()))
