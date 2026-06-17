@@ -1,8 +1,21 @@
+/**
+ * @spec-handoff (bodyless-DELETE regression — appended below existing tests)
+ * @interface Client.request(ctx context.Context, method, path string, data any, params map[string]string) (*http.Response, error)
+ * @behavior
+ *   - bodyless DELETE (data == nil): MUST NOT set Content-Type header; body MUST be empty (0 bytes)
+ *   - bodyful POST   (data != nil):  MUST set Content-Type: application/json; body MUST be non-empty
+ * @edge-cases
+ *   - The guard is purely on body presence (data == nil vs != nil); method is not the discriminator
+ *   - A 204 No Content is a valid success for DELETE — request() must return nil error
+ * @see ./client.go line ~202 (unconditional Content-Type set — the defect E2 fixes)
+ */
+
 package api
 
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -323,4 +336,112 @@ func TestClient_UserAgent(t *testing.T) {
 			t.Errorf("request to %s: User-Agent = %q, want %q", c.path, c.ua, wantUA)
 		}
 	}
+}
+
+// serveToken writes a standard token response for /auth/access_token requests.
+// Returns true if the request was handled (caller should return immediately).
+// Used by the bodyless-DELETE regression tests to avoid a real token refresh.
+func serveToken(w http.ResponseWriter, r *http.Request) bool {
+	if r.URL.Path != "/auth/access_token" {
+		return false
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(TokenResponse{
+		AccessToken: "test-token",
+		ExpiresIn:   3600,
+		TokenType:   "Bearer",
+	})
+	return true
+}
+
+// newClientFor returns a Client pointing at server.URL with no pre-seeded token,
+// so the first call will hit the token endpoint served by serveToken above.
+func newClientFor(server *httptest.Server) *Client {
+	client := NewClient(ClientOpts{
+		ClientID:     "test-id",
+		ClientSecret: "test-secret",
+		APIURL:       server.URL,
+		Timeout:      0,
+	})
+	client.apiURL = server.URL
+	return client
+}
+
+// TestRequest_BodylessDeleteOmitsContentType is the primary regression test for
+// the bodyless-DELETE bug (client.go line ~202). A DELETE with nil data must not
+// send a Content-Type header and must send an empty body.
+//
+// RED PHASE: this test FAILS against the pre-fix client because Content-Type is
+// set unconditionally at client.go:202, regardless of whether a body is present.
+func TestRequest_BodylessDeleteOmitsContentType(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveToken(w, r) {
+			return
+		}
+
+		// Primary assertion: no Content-Type on a bodyless DELETE.
+		// Use t.Errorf (not t.Fatal) so both checks always run.
+		if ct := r.Header.Get("Content-Type"); ct != "" {
+			t.Errorf("bodyless DELETE: got Content-Type %q, want empty string", ct)
+		}
+
+		// Secondary assertion: body must be empty.
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("reading request body: %v", err)
+		}
+		if len(body) != 0 {
+			t.Errorf("bodyless DELETE: got body len %d (%q), want 0", len(body), body)
+		}
+
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	client := newClientFor(server)
+
+	resp, err := client.request(context.Background(), "DELETE", "/test-endpoint", nil, nil)
+	if err != nil {
+		t.Fatalf("bodyless DELETE returned unexpected error: %v", err)
+	}
+	resp.Body.Close()
+}
+
+// TestRequest_BodyfulPostSendsContentType is the companion guard test: a POST with
+// a non-nil body must still carry Content-Type: application/json. This ensures E2's
+// fix (gating the header on body presence) does not over-correct and strip the
+// header from requests that legitimately need it.
+func TestRequest_BodyfulPostSendsContentType(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveToken(w, r) {
+			return
+		}
+
+		// Content-Type must be present on a bodyful POST.
+		if ct := r.Header.Get("Content-Type"); ct != "application/json" {
+			t.Errorf("bodyful POST: got Content-Type %q, want \"application/json\"", ct)
+		}
+
+		// Body must be non-empty.
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("reading request body: %v", err)
+		}
+		if len(body) == 0 {
+			t.Errorf("bodyful POST: got empty body, want non-empty JSON payload")
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	defer server.Close()
+
+	client := newClientFor(server)
+
+	resp, err := client.request(context.Background(), "POST", "/test-endpoint", map[string]string{"key": "value"}, nil)
+	if err != nil {
+		t.Fatalf("bodyful POST returned unexpected error: %v", err)
+	}
+	resp.Body.Close()
 }
