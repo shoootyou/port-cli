@@ -211,6 +211,12 @@ func (c *Client) request(ctx context.Context, method, path string, data any, par
 
 			// Create more descriptive error message
 			statusText := resp.Status
+
+			// For 401 Unauthorized, do NOT include response body (security)
+			if resp.StatusCode == http.StatusUnauthorized {
+				return nil, fmt.Errorf("API request to %s %s failed: %s", url, method, statusText)
+			}
+
 			bodyStr := string(body)
 			if bodyStr != "" {
 				return nil, fmt.Errorf("API request to %s %s failed: %s. Body: %s", url, method, statusText, bodyStr)

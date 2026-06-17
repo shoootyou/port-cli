@@ -296,6 +296,54 @@ func (c *Client) UpdateEntity(ctx context.Context, blueprintIdentifier, entityId
 	return result.Entity, nil
 }
 
+// CreateEntityWithParams creates a new entity with optional upsert and merge parameters.
+func (c *Client) CreateEntityWithParams(ctx context.Context, blueprintIdentifier string, entity Entity, upsert, merge bool) (Entity, error) {
+	params := make(map[string]string)
+	if upsert {
+		params["upsert"] = "true"
+		if merge {
+			params["merge"] = "true"
+		} else {
+			params["merge"] = "false"
+		}
+	} else {
+		params["upsert"] = "false"
+	}
+
+	resp, err := c.request(ctx, "POST", fmt.Sprintf("/v1/blueprints/%s/entities", blueprintIdentifier), entity, params)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Entity Entity `json:"entity"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode entity: %w", err)
+	}
+
+	return result.Entity, nil
+}
+
+// PatchEntity updates an existing entity with a partial payload (PATCH).
+func (c *Client) PatchEntity(ctx context.Context, blueprintIdentifier, entityIdentifier string, patch Entity) (Entity, error) {
+	resp, err := c.request(ctx, "PATCH", fmt.Sprintf("/v1/blueprints/%s/entities/%s", blueprintIdentifier, entityIdentifier), patch, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Entity Entity `json:"entity"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode entity: %w", err)
+	}
+
+	return result.Entity, nil
+}
+
 // DeleteEntity deletes an entity.
 func (c *Client) DeleteEntity(ctx context.Context, blueprintIdentifier, entityIdentifier string) error {
 	resp, err := c.request(ctx, "DELETE", fmt.Sprintf("/blueprints/%s/entities/%s", blueprintIdentifier, entityIdentifier), nil, nil)
