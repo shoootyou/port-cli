@@ -784,7 +784,17 @@ func TestWorkflowsUpdateRecreateConfirm(t *testing.T) {
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		authHandler(w, r)
-		if r.URL.Path == "/workflows/test-workflow" && r.Method == http.MethodDelete {
+		if r.URL.Path == "/workflows/test-workflow" && r.Method == http.MethodGet {
+			// GET probe → return existing workflow
+			apiCalls = append(apiCalls, "GET /workflows/test-workflow")
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"ok": true,
+				"workflow": map[string]interface{}{
+					"identifier": "test-workflow",
+					"title":      "Old Title",
+				},
+			})
+		} else if r.URL.Path == "/workflows/test-workflow" && r.Method == http.MethodDelete {
 			apiCalls = append(apiCalls, "DELETE /workflows/test-workflow")
 			json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
 		} else if r.URL.Path == "/workflows" && r.Method == http.MethodPost {
@@ -820,15 +830,18 @@ func TestWorkflowsUpdateRecreateConfirm(t *testing.T) {
 		t.Errorf("expected 'Updated workflow' message, got: %s", stdout)
 	}
 
-	// Verify API calls: DELETE, POST
-	if len(apiCalls) != 2 {
-		t.Fatalf("expected 2 API calls, got %d: %v", len(apiCalls), apiCalls)
+	// Verify API calls: GET probe, DELETE, POST
+	if len(apiCalls) != 3 {
+		t.Fatalf("expected 3 API calls, got %d: %v", len(apiCalls), apiCalls)
 	}
-	if apiCalls[0] != "DELETE /workflows/test-workflow" {
-		t.Errorf("expected DELETE first, got: %s", apiCalls[0])
+	if apiCalls[0] != "GET /workflows/test-workflow" {
+		t.Errorf("expected GET probe first, got: %s", apiCalls[0])
 	}
-	if apiCalls[1] != "POST /workflows" {
-		t.Errorf("expected POST second, got: %s", apiCalls[1])
+	if apiCalls[1] != "DELETE /workflows/test-workflow" {
+		t.Errorf("expected DELETE second, got: %s", apiCalls[1])
+	}
+	if apiCalls[2] != "POST /workflows" {
+		t.Errorf("expected POST third, got: %s", apiCalls[2])
 	}
 }
 
@@ -1018,31 +1031,48 @@ func TestWorkflowsUpdateRecreateRollbackOnPostFailure(t *testing.T) {
 	var apiCalls []string
 	var postBodies []map[string]interface{}
 
-	// Simulate: update has no GET probe, but should handle POST failure with rollback
-	// However, update does NOT have GET probe — it directly does DELETE + POST.
-	// If POST fails, there's no oldWorkflow to rollback to UNLESS we fetch it first.
-	// Based on the spec, update does NOT do a GET probe — it trusts the identifier.
-	// So rollback is only relevant for create (which does GET probe).
-	// This test verifies that update WITHOUT GET probe gracefully handles POST failure
-	// but CANNOT rollback (no old state fetched).
+	oldWorkflow := map[string]interface{}{
+		"identifier": "test-workflow",
+		"title":      "Old Title",
+		"data":       "old-data",
+	}
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		authHandler(w, r)
-		if r.URL.Path == "/workflows/test-workflow" && r.Method == http.MethodDelete {
+
+		if r.URL.Path == "/workflows/test-workflow" && r.Method == http.MethodGet {
+			// GET probe → return existing workflow
+			apiCalls = append(apiCalls, "GET /workflows/test-workflow")
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"ok":       true,
+				"workflow": oldWorkflow,
+			})
+		} else if r.URL.Path == "/workflows/test-workflow" && r.Method == http.MethodDelete {
+			// DELETE → success
 			apiCalls = append(apiCalls, "DELETE /workflows/test-workflow")
 			json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
 		} else if r.URL.Path == "/workflows" && r.Method == http.MethodPost {
+			// POST
 			var body map[string]interface{}
 			json.NewDecoder(r.Body).Decode(&body)
 			postBodies = append(postBodies, body)
 
-			apiCalls = append(apiCalls, "POST /workflows")
-			// POST fails
-			w.WriteHeader(http.StatusInternalServerError)
-			json.NewEncoder(w).Encode(map[string]interface{}{
-				"ok":      false,
-				"message": "Internal server error",
-			})
+			if len(postBodies) == 1 {
+				// First POST (new body) → FAIL with 500
+				apiCalls = append(apiCalls, "POST /workflows (new, FAILED)")
+				w.WriteHeader(http.StatusInternalServerError)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"ok":      false,
+					"message": "Internal server error",
+				})
+			} else {
+				// Second POST (rollback with old body) → SUCCESS
+				apiCalls = append(apiCalls, "POST /workflows (rollback, OK)")
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"ok":       true,
+					"workflow": body,
+				})
+			}
 		}
 	})
 	rootCmd, _, cleanup := setupTestCommand(handler)
@@ -1050,29 +1080,58 @@ func TestWorkflowsUpdateRecreateRollbackOnPostFailure(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	workflowFile := filepath.Join(tmpDir, "workflow.json")
-	content := `{"identifier":"test-workflow","title":"Updated"}`
-	if err := os.WriteFile(workflowFile, []byte(content), 0o644); err != nil {
+	newContent := `{"identifier":"test-workflow","title":"New Title","data":"new-data"}`
+	if err := os.WriteFile(workflowFile, []byte(newContent), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	// Execute update with --force
 	_, _, err := executeCommand(rootCmd, "workflows", "update", "test-workflow", "--file", workflowFile, "--force")
 
-	// MUST return an error (POST failed)
+	// MUST return an error (the POST failed)
 	if err == nil {
 		t.Fatal("expected error after POST failure, got nil")
 	}
 
-	// Verify DELETE happened, POST happened (failed), NO rollback (no GET probe)
+	// Error message should mention rollback
+	if !strings.Contains(err.Error(), "rollback") && !strings.Contains(err.Error(), "restored") {
+		t.Errorf("expected error to mention rollback, got: %v", err)
+	}
+
+	// Verify API call sequence: GET, DELETE, POST (failed), POST (rollback)
 	expectedCalls := []string{
+		"GET /workflows/test-workflow",
 		"DELETE /workflows/test-workflow",
-		"POST /workflows",
+		"POST /workflows (new, FAILED)",
+		"POST /workflows (rollback, OK)",
 	}
 	if len(apiCalls) != len(expectedCalls) {
 		t.Fatalf("expected %d API calls, got %d: %v", len(expectedCalls), len(apiCalls), apiCalls)
 	}
+	for i, expected := range expectedCalls {
+		if apiCalls[i] != expected {
+			t.Errorf("call %d: expected %q, got %q", i, expected, apiCalls[i])
+		}
+	}
 
-	// NOTE: For update, rollback is NOT possible without GET probe.
-	// If the spec requires rollback for update too, we'd need to add a GET probe before DELETE.
-	// Current spec only mentions rollback for create (which has GET probe).
+	// Verify POST bodies: first = new, second = old (rollback)
+	if len(postBodies) != 2 {
+		t.Fatalf("expected 2 POST bodies, got %d", len(postBodies))
+	}
+
+	// First POST body should be the new content
+	if postBodies[0]["title"] != "New Title" {
+		t.Errorf("first POST should have new title, got: %v", postBodies[0]["title"])
+	}
+	if postBodies[0]["data"] != "new-data" {
+		t.Errorf("first POST should have new data, got: %v", postBodies[0]["data"])
+	}
+
+	// Second POST body should be the old content (rollback)
+	if postBodies[1]["title"] != "Old Title" {
+		t.Errorf("rollback POST should have old title, got: %v", postBodies[1]["title"])
+	}
+	if postBodies[1]["data"] != "old-data" {
+		t.Errorf("rollback POST should have old data, got: %v", postBodies[1]["data"])
+	}
 }

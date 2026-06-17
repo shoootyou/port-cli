@@ -248,7 +248,7 @@ func registerWorkflowsCreate() *cobra.Command {
 			}
 
 			// Workflow exists — enter recreate mode
-			return recreateWorkflow(cmd, client, identifier, body, existingWorkflow, force)
+			return recreateWorkflow(cmd, client, identifier, body, existingWorkflow, force, true)
 		},
 	}
 
@@ -260,7 +260,7 @@ func registerWorkflowsCreate() *cobra.Command {
 }
 
 // recreateWorkflow implements the recreate-and-rollback logic for create and update.
-func recreateWorkflow(cmd *cobra.Command, client *api.Client, identifier string, newBody, oldWorkflow map[string]interface{}, force bool) error {
+func recreateWorkflow(cmd *cobra.Command, client *api.Client, identifier string, newBody, oldWorkflow map[string]interface{}, force bool, isCreate bool) error {
 	ctx := cmd.Context()
 
 	// Confirm unless --force
@@ -290,7 +290,7 @@ func recreateWorkflow(cmd *cobra.Command, client *api.Client, identifier string,
 	}
 
 	// Success
-	if cmd.Use == "create --file <path>" {
+	if isCreate {
 		fmt.Fprintf(cmd.OutOrStdout(), "Replaced workflow %s\n", identifier)
 	} else {
 		fmt.Fprintf(cmd.OutOrStdout(), "Updated workflow %s\n", identifier)
@@ -331,7 +331,7 @@ func registerWorkflowsUpdate() *cobra.Command {
 				return err
 			}
 
-			// Check for identifier mismatch
+			// Check for identifier mismatch (before any API call)
 			if fileIdentifier != identifier {
 				return fmt.Errorf("identifier mismatch: argument is %q but file contains %q", identifier, fileIdentifier)
 			}
@@ -344,38 +344,19 @@ func registerWorkflowsUpdate() *cobra.Command {
 
 			ctx := cmd.Context()
 
-			// For update, we do NOT do a GET probe (per spec).
-			// We directly recreate (DELETE + POST).
-			// However, to support rollback on POST failure, we need the old workflow.
-			// According to the spec, update does NOT have a GET probe, so we cannot rollback
-			// if the POST fails. This is acceptable per the spec comments in the test file.
-			// The test TestWorkflowsUpdateRecreateRollbackOnPostFailure verifies that
-			// update WITHOUT rollback still returns an error when POST fails.
-
-			// Confirm unless --force
-			prompt := fmt.Sprintf("Update workflow %s? This operation is non-atomic (delete then create). (y/n): ", identifier)
-			confirmed, err := confirmAction(prompt, force, cmd.InOrStdin())
+			// GET probe to check if workflow exists and stash the old definition
+			existingWorkflow, err := client.GetWorkflow(ctx, identifier)
 			if err != nil {
-				return fmt.Errorf("failed to read confirmation: %w", err)
-			}
-			if !confirmed {
-				fmt.Fprintln(cmd.OutOrStdout(), "Aborted")
-				return nil
-			}
-
-			// DELETE
-			if err := client.DeleteWorkflow(ctx, identifier); err != nil {
-				return fmt.Errorf("failed to delete workflow: %w", err)
+				// If not found, return a clear "not found" error
+				if errors.Is(err, api.ErrWorkflowNotFound) {
+					return fmt.Errorf("workflow %s not found", identifier)
+				}
+				// Other error
+				return err
 			}
 
-			// POST (new body)
-			if _, err := client.CreateWorkflow(ctx, body); err != nil {
-				// No rollback for update (no GET probe to fetch old state)
-				return fmt.Errorf("workflow %s was deleted, but recreate failed: %w. Manual restoration required", identifier, err)
-			}
-
-			fmt.Fprintf(cmd.OutOrStdout(), "Updated workflow %s\n", identifier)
-			return nil
+			// Workflow exists — enter recreate mode with rollback
+			return recreateWorkflow(cmd, client, identifier, body, existingWorkflow, force, false)
 		},
 	}
 

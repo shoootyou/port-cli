@@ -1102,7 +1102,9 @@ func (c *Client) GetWorkflows(ctx context.Context) ([]map[string]interface{}, er
 func (c *Client) GetWorkflow(ctx context.Context, identifier string) (map[string]interface{}, error) {
 	resp, err := c.request(ctx, "GET", fmt.Sprintf("/workflows/%s", identifier), nil, nil)
 	if err != nil {
-		// Check if this is a 404 error
+		// COUPLING: 404 is detected by matching the request() error string (which embeds the HTTP status).
+		// A structured APIError type would be cleaner but requires a systemic client.go refactor (+ the
+		// permission-retry regex in import.go). Tracked as a deferred finding. See gotchas/port-cli.md.
 		if strings.Contains(err.Error(), "404") {
 			return nil, fmt.Errorf("workflow %s: %w", identifier, ErrWorkflowNotFound)
 		}
