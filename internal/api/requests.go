@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -39,6 +40,9 @@ type Integration map[string]interface{}
 
 // Permissions represents Port resource permissions.
 type Permissions map[string]interface{}
+
+// ErrWorkflowNotFound is returned when a workflow is not found (HTTP 404).
+var ErrWorkflowNotFound = errors.New("workflow not found")
 
 type RequestParams struct {
 	Method   string
@@ -260,6 +264,47 @@ func (c *Client) GetEntity(ctx context.Context, blueprintIdentifier, entityIdent
 	return result.Entity, nil
 }
 
+// CreateEntityWithParams creates or upserts an entity with explicit query parameters.
+// upsert=true means Port will update the entity if it already exists.
+// merge=true means Port merges array/object properties instead of replacing them.
+// Returns the "entity" field from the API response.
+func (c *Client) CreateEntityWithParams(
+	ctx context.Context,
+	blueprint string,
+	body map[string]interface{},
+	upsert bool,
+	merge bool,
+) (map[string]interface{}, error) {
+	params := map[string]string{}
+	if upsert {
+		params["upsert"] = "true"
+		// Only include merge param when upsert is true (it's meaningless otherwise).
+		if merge {
+			params["merge"] = "true"
+		} else {
+			params["merge"] = "false"
+		}
+	} else {
+		params["upsert"] = "false"
+	}
+
+	resp, err := c.request(ctx, "POST",
+		fmt.Sprintf("/blueprints/%s/entities", blueprint),
+		body, params)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Entity map[string]interface{} `json:"entity"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode entity: %w", err)
+	}
+	return result.Entity, nil
+}
+
 // CreateEntity creates a new entity.
 func (c *Client) CreateEntity(ctx context.Context, blueprintIdentifier string, entity Entity) (Entity, error) {
 	resp, err := c.request(ctx, "POST", fmt.Sprintf("/blueprints/%s/entities", blueprintIdentifier), entity, nil)
@@ -281,6 +326,26 @@ func (c *Client) CreateEntity(ctx context.Context, blueprintIdentifier string, e
 // UpdateEntity updates an existing entity.
 func (c *Client) UpdateEntity(ctx context.Context, blueprintIdentifier, entityIdentifier string, entity Entity) (Entity, error) {
 	resp, err := c.request(ctx, "PUT", fmt.Sprintf("/blueprints/%s/entities/%s", blueprintIdentifier, entityIdentifier), entity, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Entity Entity `json:"entity"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode entity: %w", err)
+	}
+
+	return result.Entity, nil
+}
+
+// PatchEntity applies a partial update to an entity (PATCH).
+// The entity parameter is the partial payload to merge (e.g., {"properties": {...}}).
+// Returns the updated entity from the response.
+func (c *Client) PatchEntity(ctx context.Context, blueprintIdentifier, entityIdentifier string, entity Entity) (Entity, error) {
+	resp, err := c.request(ctx, "PATCH", fmt.Sprintf("/blueprints/%s/entities/%s", blueprintIdentifier, entityIdentifier), entity, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -1074,4 +1139,74 @@ func (c *Client) GetSkillFilesForVersions(ctx context.Context, versionIdentifier
 			},
 		},
 	})
+}
+
+// GetWorkflows retrieves all workflows.
+func (c *Client) GetWorkflows(ctx context.Context) ([]map[string]interface{}, error) {
+	resp, err := c.request(ctx, "GET", "/workflows", nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Workflows []map[string]interface{} `json:"workflows"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode workflows: %w", err)
+	}
+
+	return result.Workflows, nil
+}
+
+// GetWorkflow retrieves a specific workflow by identifier.
+func (c *Client) GetWorkflow(ctx context.Context, identifier string) (map[string]interface{}, error) {
+	resp, err := c.request(ctx, "GET", fmt.Sprintf("/workflows/%s", identifier), nil, nil)
+	if err != nil {
+		// COUPLING: 404 is detected by matching the request() error string (which embeds the HTTP status).
+		// A structured APIError type would be cleaner but requires a systemic client.go refactor (+ the
+		// permission-retry regex in import.go). Tracked as a deferred finding. See gotchas/port-cli.md.
+		if strings.Contains(err.Error(), "404") {
+			return nil, fmt.Errorf("workflow %s: %w", identifier, ErrWorkflowNotFound)
+		}
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Workflow map[string]interface{} `json:"workflow"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode workflow: %w", err)
+	}
+
+	return result.Workflow, nil
+}
+
+// CreateWorkflow creates a new workflow.
+func (c *Client) CreateWorkflow(ctx context.Context, body map[string]interface{}) (map[string]interface{}, error) {
+	resp, err := c.request(ctx, "POST", "/workflows", body, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Workflow map[string]interface{} `json:"workflow"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode workflow: %w", err)
+	}
+
+	return result.Workflow, nil
+}
+
+// DeleteWorkflow deletes a workflow by identifier.
+func (c *Client) DeleteWorkflow(ctx context.Context, identifier string) error {
+	resp, err := c.request(ctx, "DELETE", fmt.Sprintf("/workflows/%s", identifier), nil, nil)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	return nil
 }
