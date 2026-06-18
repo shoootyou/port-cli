@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+### Added
+- Added `port skills catalog` command group for provisioning skill entities in the Port catalog. Sub-commands: `create` (upsert, `--force` full-replace, `--patch` partial-update), `list`, `get`, `update`, `delete`, and `blueprint init` (idempotent bootstrap of the `skill` blueprint). All commands accept `-o table|json|yaml` output format where applicable.
+
 ## 0.2.17 (28-05-2026)
 
 ### Fixed
