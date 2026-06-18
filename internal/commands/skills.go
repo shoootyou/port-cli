@@ -35,6 +35,8 @@ from Port.`,
 	skillsCmd.AddCommand(registerSkillsClear())
 	skillsCmd.AddCommand(registerSkillsStatus())
 
+	RegisterSkillsCatalog(skillsCmd)
+
 	rootCmd.AddCommand(skillsCmd)
 }
 
@@ -1197,7 +1199,8 @@ func valueOrNone(s string) string {
 // attempt to parse the human-readable output as JSON.
 func printLoadResult(result *skills.LoadSkillsResult) {
 	total := result.RequiredCount + result.SelectedCount
-	fmt.Fprintf(os.Stderr,
+	fmt.Fprintf(
+		os.Stderr,
 		"%s %d skill(s) synced (%d required, %d selected)\n",
 		styles.CheckMark,
 		total,
@@ -1224,7 +1227,8 @@ func printLoadResult(result *skills.LoadSkillsResult) {
 	if len(globalTargets) > 0 {
 		fmt.Fprintln(os.Stderr)
 		for _, t := range globalTargets {
-			fmt.Fprintf(os.Stderr, "  %s %s/skills/port/  %s  %s\n",
+			fmt.Fprintf(
+				os.Stderr, "  %s %s/skills/port/  %s  %s\n",
 				styles.Circle,
 				t.Path,
 				styles.GlobalLabel,
@@ -1236,7 +1240,8 @@ func printLoadResult(result *skills.LoadSkillsResult) {
 	if len(projectTargets) > 0 {
 		fmt.Fprintln(os.Stderr)
 		for _, t := range projectTargets {
-			fmt.Fprintf(os.Stderr, "  %s %s/skills/port/  %s  %s\n",
+			fmt.Fprintf(
+				os.Stderr, "  %s %s/skills/port/  %s  %s\n",
 				styles.Circle,
 				t.Path,
 				styles.ProjectLabel,
@@ -1248,7 +1253,8 @@ func printLoadResult(result *skills.LoadSkillsResult) {
 	if len(copilotRepoTargets) > 0 {
 		fmt.Fprintln(os.Stderr)
 		for _, t := range copilotRepoTargets {
-			fmt.Fprintf(os.Stderr, "  %s %s/skills/port/  %s  %s\n",
+			fmt.Fprintf(
+				os.Stderr, "  %s %s/skills/port/  %s  %s\n",
 				styles.Circle,
 				t.Path,
 				styles.CopilotRepoLabel,

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -369,6 +370,48 @@ func (c *Client) DeleteEntity(ctx context.Context, blueprintIdentifier, entityId
 	}
 	defer resp.Body.Close()
 	return nil
+}
+
+// UpsertSkillEntity creates or updates a skill entity via POST /blueprints/skill/entities.
+// The upsert param controls whether an existing entity is updated; merge controls whether
+// the update merges into or fully replaces the existing properties.
+func (c *Client) UpsertSkillEntity(ctx context.Context, entity Entity, upsert, merge bool) (Entity, error) {
+	params := map[string]string{
+		"upsert": strconv.FormatBool(upsert),
+		"merge":  strconv.FormatBool(merge),
+	}
+	resp, err := c.request(ctx, "POST", "/blueprints/skill/entities", entity, params)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Entity Entity `json:"entity"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode entity: %w", err)
+	}
+
+	return result.Entity, nil
+}
+
+// PatchSkillEntity applies a partial update to a skill entity via PATCH /blueprints/skill/entities/<identifier>.
+func (c *Client) PatchSkillEntity(ctx context.Context, identifier string, entity Entity) (Entity, error) {
+	resp, err := c.request(ctx, "PATCH", fmt.Sprintf("/blueprints/skill/entities/%s", identifier), entity, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Entity Entity `json:"entity"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode entity: %w", err)
+	}
+
+	return result.Entity, nil
 }
 
 // GetScorecards retrieves scorecards for a blueprint.

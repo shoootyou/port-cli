@@ -10,6 +10,7 @@ A modular command-line interface for Port that enables data import/export, organ
 - 🔍 **Compare**: Diff two Port organizations and generate reports (text, JSON, HTML)
 - 🔌 **API Operations**: Direct CRUD operations on Port resources
 - 🤖 **Skills**: Sync AI skills from Port into your local AI coding tools (Cursor, Claude Code, Gemini CLI, OpenAI Codex, Windsurf, GitHub Copilot)
+- 🗂️ **Skills catalog**: Provision and manage skill entities in the Port catalog from Markdown files
 - 💬 **Agents**: Invoke Port AI Agents from the terminal and stream their responses
 
 ## Installation
@@ -148,6 +149,7 @@ port agents invoke triage_agent "Storage account for the payments system"
 - `port migrate` - Migrate data between organizations
 - `port api` - Direct API operations (blueprints, entities)
 - `port skills` - Manage Port AI skill hooks and local skill sync
+- `port skills catalog` - Provision and manage skill entities in the Port catalog (create, list, get, update, delete)
 - `port agents` - Invoke Port AI Agents and stream their responses
 - `port cache` - Manage locally cached Port data (e.g. `port cache clear`)
 - `port config` - Manage configuration
@@ -344,7 +346,7 @@ port skills clear
 port cache clear
 ```
 
-See [docs/skills-setup.md](docs/skills-setup.md) for full setup instructions.
+See [docs/skills-setup.md](docs/skills-setup.md) for full setup instructions and [docs/skills-catalog.md](docs/skills-catalog.md) for provisioning skill entities in the Port catalog.
 
 ### AI Agents
 
