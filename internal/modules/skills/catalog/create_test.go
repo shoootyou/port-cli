@@ -35,7 +35,7 @@ func newTestServer(t *testing.T, requestCount *atomic.Int64, fn http.HandlerFunc
 	}))
 	client := api.NewClient(api.ClientOpts{
 		ClientID:     "id",
-		ClientSecret: "secret",
+		ClientSecret: "test-secret",
 		APIURL:       srv.URL,
 		Timeout:      0,
 	})
@@ -294,6 +294,83 @@ func TestCreateSkill_HTTP201_Success(t *testing.T) {
 	}
 	if err := catalog.CreateSkill(context.Background(), client, entity, catalog.CreateOptions{}); err != nil {
 		t.Fatalf("expected nil error on HTTP 201, got: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// A — PATCH path must surface the blueprint-init hint on 404
+// ---------------------------------------------------------------------------
+
+// TestCreateSkill_Patch404_ErrorMentionsBlueprintInit asserts that when
+// Patch=true and the server returns 404, the error message contains the
+// actionable blueprint-init hint.  Currently the patch branch does NOT wrap
+// 404 (only the upsert branch does), so this test is RED until Kou fixes it.
+func TestCreateSkill_Patch404_ErrorMentionsBlueprintInit(t *testing.T) {
+	srv, client := newTestServer(t, nil, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"ok":      false,
+			"error":   "not_found",
+			"message": "Blueprint skill not found",
+		})
+	})
+	defer srv.Close()
+
+	entity := catalog.SkillEntity{
+		Identifier:  "patch-missing-bp",
+		Description: "Blueprint missing for patch",
+		Location:    "global",
+	}
+	err := catalog.CreateSkill(context.Background(), client, entity, catalog.CreateOptions{Patch: true})
+	if err == nil {
+		t.Fatal("expected error when blueprint missing on PATCH, got nil")
+	}
+	if !strings.Contains(err.Error(), "port skills catalog blueprint init") {
+		t.Errorf("expected error to contain 'port skills catalog blueprint init', got: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// E — is404/is409 must not false-positive on bodies containing the digits
+// ---------------------------------------------------------------------------
+
+// TestCreateSkill_HTTP500WithBodyContaining404Text_NotMisclassified asserts
+// that a genuine HTTP 500 whose body happens to contain the text "404" is NOT
+// misclassified as a blueprint-missing error.
+//
+// The current naive strings.Contains(err,"404") check fires on the body text
+// so this test is RED.  After Kou's fix the is404 helper should match only
+// the HTTP status segment (e.g. "failed: 404 "), not arbitrary body content.
+func TestCreateSkill_HTTP500WithBodyContaining404Text_NotMisclassified(t *testing.T) {
+	srv, client := newTestServer(t, nil, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		// Body deliberately contains the digit sequence "404" to trigger the
+		// false-positive in the naive strings.Contains implementation.
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"ok":      false,
+			"error":   "upstream_failure",
+			"message": "upstream 404 from dependency",
+		})
+	})
+	defer srv.Close()
+
+	entity := catalog.SkillEntity{
+		Identifier:  "e-test-skill",
+		Description: "E false-positive test",
+		Location:    "global",
+	}
+	err := catalog.CreateSkill(context.Background(), client, entity, catalog.CreateOptions{})
+	if err == nil {
+		t.Fatal("expected an error from HTTP 500, got nil")
+	}
+	// The error must NOT be mis-wrapped with the blueprint-init hint.
+	if strings.Contains(err.Error(), "port skills catalog blueprint init") {
+		t.Errorf("HTTP 500 with body containing '404' was mis-classified as blueprint-missing.\nGot error: %v", err)
+	}
+	// The error SHOULD surface something about the actual failure status.
+	errStr := err.Error()
+	if !strings.Contains(errStr, "500") && !strings.Contains(errStr, "Internal Server Error") && !strings.Contains(errStr, "internal_error") && !strings.Contains(errStr, "upstream_failure") {
+		t.Errorf("expected error to surface HTTP body/status, got: %v", err)
 	}
 }
 

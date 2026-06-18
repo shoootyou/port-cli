@@ -357,3 +357,110 @@ func TestParseSkillFile_NonExistentPathReturnsError(t *testing.T) {
 		t.Fatal("expected error for non-existent path, got nil")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// D — identifier path-traversal rejection in the parser
+// ---------------------------------------------------------------------------
+
+// TestParseSkillFile_PathTraversalIdentifierRejected asserts that identifiers
+// containing path separators or traversal sequences are rejected with an error
+// containing "identifier".
+//
+// The allowed character set is ^[A-Za-z0-9._-]+$ — only letters, digits,
+// dots, underscores, and hyphens.  No slashes or backslashes.
+//
+// Currently no guard exists in parse.go so these tests are RED until Kou adds
+// the validation.
+func TestParseSkillFile_PathTraversalIdentifierRejected(t *testing.T) {
+	traversalCases := []struct {
+		name       string
+		identifier string
+	}{
+		{
+			name:       "unix path traversal with dotdot",
+			identifier: "../other-bp/x",
+		},
+		{
+			name:       "unix nested path",
+			identifier: "a/b",
+		},
+		{
+			name:       "windows backslash traversal",
+			identifier: `..\\x`,
+		},
+		{
+			name:       "leading slash",
+			identifier: "/absolute",
+		},
+		{
+			name:       "embedded slash",
+			identifier: "some/skill",
+		},
+	}
+
+	for _, tc := range traversalCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Write a valid file except for the identifier under test.
+			input := fmt.Sprintf(
+				"---\nidentifier: %s\ntitle: T\ndescription: desc\nlocation: global\n---\nBody.\n",
+				tc.identifier,
+			)
+			dir := t.TempDir()
+			path := writeFile(t, dir, "traversal.md", input)
+
+			_, err := catalog.ParseSkillFile(path)
+			if err == nil {
+				t.Fatalf("expected error for traversal identifier %q, got nil", tc.identifier)
+			}
+			if !strings.Contains(err.Error(), "identifier") {
+				t.Errorf("error should mention 'identifier', got: %v", err)
+			}
+		})
+	}
+}
+
+// TestParseSkillFile_ValidIdentifierAccepted is the positive complement of the
+// traversal rejection tests: identifiers matching ^[A-Za-z0-9._-]+$ must NOT
+// be rejected.
+func TestParseSkillFile_ValidIdentifierAccepted(t *testing.T) {
+	validCases := []struct {
+		name       string
+		identifier string
+	}{
+		{
+			name:       "letters digits hyphen",
+			identifier: "storage-account-sbs",
+		},
+		{
+			name:       "with dot",
+			identifier: "my.skill.v2",
+		},
+		{
+			name:       "with underscore",
+			identifier: "my_skill",
+		},
+		{
+			name:       "mixed",
+			identifier: "Abc-123_x.y",
+		},
+	}
+
+	for _, tc := range validCases {
+		t.Run(tc.name, func(t *testing.T) {
+			input := fmt.Sprintf(
+				"---\nidentifier: %s\ntitle: T\ndescription: desc\nlocation: global\n---\nBody.\n",
+				tc.identifier,
+			)
+			dir := t.TempDir()
+			path := writeFile(t, dir, "valid.md", input)
+
+			got, err := catalog.ParseSkillFile(path)
+			if err != nil {
+				t.Fatalf("unexpected error for valid identifier %q: %v", tc.identifier, err)
+			}
+			if got.Identifier != tc.identifier {
+				t.Errorf("Identifier: got %q, want %q", got.Identifier, tc.identifier)
+			}
+		})
+	}
+}
