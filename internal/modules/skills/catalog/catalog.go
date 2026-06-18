@@ -13,11 +13,11 @@ const (
 
 // SkillEntity represents a skill provisioned in the Port catalog.
 type SkillEntity struct {
-	Identifier   string
-	Title        string // defaults to Identifier when empty
-	Description  string
-	Location     string // "global" (default) | "project"
-	Instructions string // Markdown body, TrimSpace applied
+	Identifier   string `json:"identifier"`
+	Title        string `json:"title"` // defaults to Identifier when empty
+	Description  string `json:"description"`
+	Location     string `json:"location"`     // "global" (default) | "project"
+	Instructions string `json:"instructions"` // Markdown body, TrimSpace applied
 }
 
 // CreateOptions controls the write behaviour of CreateSkill.

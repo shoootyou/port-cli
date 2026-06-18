@@ -26,27 +26,35 @@ func CreateSkill(ctx context.Context, client *api.Client, entity SkillEntity, op
 
 	if opts.Patch {
 		_, err := client.PatchSkillEntity(ctx, entity.Identifier, toAPIEntity(entity))
-		return err
+		return wrapBlueprintHint(err)
 	}
 
 	// Upsert: merge=true by default; merge=false when Force=true (full replace).
 	merge := !opts.Force
 	_, err := client.UpsertSkillEntity(ctx, toAPIEntity(entity), true, merge)
-	if err != nil {
-		if is404(err) {
-			return fmt.Errorf("%w\nhint: the skill blueprint is not initialised — run `port skills catalog blueprint init`", err)
-		}
-		return err
+	return wrapBlueprintHint(err)
+}
+
+// wrapBlueprintHint wraps a 404 error with an actionable hint to run
+// `port skills catalog blueprint init`. For all other errors (including nil),
+// it returns the error unchanged.
+func wrapBlueprintHint(err error) error {
+	if err == nil {
+		return nil
 	}
-	return nil
+	if is404(err) {
+		return fmt.Errorf("%w\nhint: the skill blueprint is not initialised — run `port skills catalog blueprint init`", err)
+	}
+	return err
 }
 
 // is404 returns true when the error message indicates an HTTP 404 response from
-// the Port API (as emitted by api.Client.request).
+// the Port API (as emitted by api.Client.request). It matches the status
+// segment "failed: 404 " to avoid false-positives from body text that happens
+// to contain the digit sequence "404".
 func is404(err error) bool {
 	if err == nil {
 		return false
 	}
-	msg := err.Error()
-	return strings.Contains(msg, "404") || strings.Contains(msg, "Not Found")
+	return strings.Contains(err.Error(), "failed: 404 ")
 }

@@ -249,7 +249,7 @@ Equivalent to 'port skills catalog create --patch'.`,
 			defer closer()
 
 			if err := catalog.UpdateSkill(ctx, client, entity); err != nil {
-				return err
+				return fmt.Errorf("failed to update skill %q: %w", entity.Identifier, err)
 			}
 
 			return printSkillOutput(output, entity)

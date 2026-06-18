@@ -4,12 +4,19 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 
 	"gopkg.in/yaml.v3"
 )
 
 const maxFileSize = 1 << 20 // 1 MB
+
+// identifierRe is the allowed character set for skill identifiers.
+// Only letters, digits, hyphens, underscores, and dots are permitted.
+// Slashes, backslashes, and other special characters are rejected to prevent
+// path-traversal attacks when the identifier is used in API URL paths.
+var identifierRe = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
 // frontmatterFields is the set of fields we unmarshal from the YAML frontmatter.
 type frontmatterFields struct {
@@ -87,6 +94,9 @@ func ParseSkillFile(path string) (SkillEntity, error) {
 	// Validate required fields.
 	if fm.Identifier == "" {
 		return SkillEntity{}, fmt.Errorf("missing required frontmatter field: identifier")
+	}
+	if !identifierRe.MatchString(fm.Identifier) {
+		return SkillEntity{}, fmt.Errorf("invalid identifier %q: must match [A-Za-z0-9._-]", fm.Identifier)
 	}
 	if fm.Description == "" {
 		return SkillEntity{}, fmt.Errorf("missing required frontmatter field: description")

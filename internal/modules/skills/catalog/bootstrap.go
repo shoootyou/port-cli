@@ -97,11 +97,12 @@ func BootstrapBlueprint(ctx context.Context, client *api.Client) error {
 	return createErr
 }
 
-// is409 returns true when the error message indicates an HTTP 409 Conflict.
+// is409 returns true when the error message indicates an HTTP 409 response from
+// the Port API. It matches the status segment "failed: 409 " to avoid
+// false-positives from body text that happens to contain the digit sequence "409".
 func is409(err error) bool {
 	if err == nil {
 		return false
 	}
-	msg := err.Error()
-	return strings.Contains(msg, "409") || strings.Contains(msg, "Conflict")
+	return strings.Contains(err.Error(), "failed: 409 ")
 }
