@@ -199,7 +199,9 @@ func (c *Client) request(ctx context.Context, method, path string, data any, par
 		}
 
 		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
-		req.Header.Set("Content-Type", "application/json")
+		if jsonData != nil {
+			req.Header.Set("Content-Type", "application/json")
+		}
 		req.Header.Set("User-Agent", useragent.String())
 
 		// Add query parameters
